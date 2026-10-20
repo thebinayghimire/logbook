@@ -1,6 +1,6 @@
 # Logbook
 
-An interactive GitHub archival telemetry folio. The frontend is a single HTML file with no build step. The Node bridge provides a username-first GitHub OAuth flow and keeps access tokens out of the browser.
+An interactive GitHub archival telemetry folio. The frontend is a single HTML file with no build step. The Node bridge provides a username-first GitHub OAuth flow, persistent encrypted sessions, and background snapshot sync while keeping GitHub tokens out of the browser.
 
 ## Authorization first
 
@@ -15,13 +15,13 @@ The app does not offer an unauthenticated public-data bypass on the entry screen
 
 After authorization, the account dossier shows the authenticated profile, accessible/private/public repository counts, the private repository ledger, organizations, starred repositories, gists, followers, and following. The main ledger includes **all repositories the token can access** — owner, collaborator, and organization-member repositories, public and private.
 
-The bridge only makes read-only `GET` requests to the GitHub API. It never writes to GitHub.
+The bridge only issues read-only GitHub requests: REST `GET` calls plus a GraphQL query for the official contribution calendar. It never writes to GitHub.
 
-After authorization, the dashboard paints the encrypted snapshot immediately. If the snapshot is older than `SNAPSHOT_FRESH_MS` (default 60 seconds), an incremental scan starts in the background; a fresh snapshot skips the load-time scan. The dashboard also performs a silent conditional repository check every five seconds while the tab is visible. Unchanged `304 Not Modified` responses do not consume the authenticated primary rate limit. A background scan runs only when the repository signature changes; background checks do not show spinners, banners, or toast notifications. Rate-limit responses trigger an automatic backoff.
+After authorization, the dashboard paints the encrypted snapshot immediately. If the snapshot is older than `SNAPSHOT_FRESH_MS` (default 60 seconds), an incremental scan starts in the background; a fresh snapshot skips the load-time scan. Sync progress streams over Server-Sent Events (`/api/events`). A visible tab also runs a silent conditional repository check every 60 seconds as a fallback, using ETags and a repository signature. Unchanged `304 Not Modified` responses do not consume the authenticated primary rate limit. A background scan runs only when the repository signature changes; background checks do not show spinners, banners, or toast notifications. Rate-limit responses trigger an automatic backoff.
 
 The first authorized account scan is stored as an encrypted, account-partitioned snapshot in `data/logbook.sqlite`. The browser paints that snapshot immediately on every later visit, then revalidates it in the background. A scan writes a small profile + repository summary first and fills in commit and language detail per repository, so the dashboard shell does not wait for the full crawl. Unchanged repositories are reused and only commits newer than the last indexed commit are requested.
 
-Snapshots are AES-256-GCM encrypted at rest with `SNAPSHOT_ENCRYPTION_KEY` (or a generated development key), keyed by the immutable GitHub account ID. Signing out removes the session that can read them. The scan queue exposes progress, retries transient upstream failures, deduplicates concurrent scans per account, survives page navigation, and marks interrupted jobs as failed on restart. Snapshots are normalized (not raw GitHub payloads), Brotli-compressed, and support cursor pagination for large ledgers.
+Sessions, encrypted GitHub tokens, server-side preferences, and audit records live in the same SQLite database. Snapshots and session tokens are AES-256-GCM encrypted at rest with `SNAPSHOT_ENCRYPTION_KEY` (or a generated development key), and snapshots are bound to the immutable GitHub account ID. Signing out revokes the session that can read the snapshot; deleting the account removes the snapshot entirely. The scan queue exposes progress, retries transient upstream failures, deduplicates concurrent scans per account, survives page navigation, and marks interrupted jobs as failed on restart. Snapshots are normalized (not raw GitHub payloads), compressed for transport, and support cursor pagination for large ledgers.
 
 ## What the dashboard shows
 
@@ -36,14 +36,17 @@ Snapshots are AES-256-GCM encrypted at rest with `SNAPSHOT_ENCRYPTION_KEY` (or a
 
 The header account dossier (`@handle`) is the private-data view: identity, bio, location, website, join date, counts, private repositories, orgs, stars, gists, followers, and following. It also has the sign-out control.
 
+Filters are mirrored in the URL for bookmarking and browser back/forward. Named saved views store the current filter set per account. The footer and filter bar open a metric glossary that explains commit attribution, active days, streaks, code volume, reviews, scan limits, and partial data.
+
 ## Data sources
 
-All values are fetched live from the GitHub REST API.
+Most dashboard values are fetched from the GitHub REST API. The contribution calendar uses a read-only GraphQL query when the token permits it.
 
 | Data | Endpoint |
 |---|---|
 | Authenticated identity | `GET /user` |
 | Public profile | `GET /users/:user` |
+| Verified emails for commit attribution | `GET /user/emails` |
 | All accessible repositories | `GET /user/repos?affiliation=owner,collaborator,organization_member&visibility=all&sort=pushed` |
 | Public-only repositories | `GET /users/:user/repos?sort=pushed` |
 | Commits | `GET /repos/:owner/:repo/commits?per_page=100` |
@@ -51,20 +54,22 @@ All values are fetched live from the GitHub REST API.
 | Newest-commit diff stats | `GET /repos/:owner/:repo/commits/:sha` |
 | Authored PRs / issues / reviews | `GET /search/issues?q=...` |
 | Orgs, stars, gists, followers, following | `GET /user/orgs`, `/user/starred`, `/gists`, `/user/followers`, `/user/following` |
+| Official contribution calendar | `POST /graphql` → `viewer.contributionsCollection.contributionCalendar` |
 | Lazy file tree / README / patch | Repository, tree, readme, and commit endpoints, fetched only when a row is opened |
 
-The first 100 non-fork, non-archived repositories are scanned for commit and language detail. Pagination is followed for repository and account lists. Empty repositories return `409` from the commits endpoint and are skipped.
+Commits are attributed to the authorized account by linked GitHub login, or by a verified email when no GitHub account is linked. Unverified addresses are never used. Merge commits and bot/automation commits are excluded by default. Analytics use the default branch of each repository. The first 100 non-fork, non-archived repositories are scanned for commit and language detail; pagination is followed for repository and account lists, and truncation is reported in the snapshot metadata. Empty repositories return `409` from the commits endpoint and are skipped.
 
 ### Derived, not fetched
 
-- **Contribution heatmap** — GitHub's official contribution graph includes private/org contributions and is only exposed through GraphQL. This folio buckets the commit timestamps it actually fetched, so the grid reflects scanned repositories.
-- **Punch card** — weekday × hour buckets from those commit timestamps.
+- **Contribution heatmap** — uses GitHub's official GraphQL contribution calendar when available, which includes private and organization contributions. If GraphQL is unavailable, the UI clearly labels a locally derived fallback built from scanned commit timestamps.
+- **Punch card** — weekday × hour buckets from attributed commit timestamps.
 - **KPI sparklines** — commit counts binned across the selected window.
 - **Code volume** — sum of language byte totals, not a `git diff` line count.
+- **Active days and streaks** — calendar days with at least one attributed contribution, computed in UTC.
 
 ## Run locally
 
-Requires Node.js 18 or newer. There are no npm dependencies.
+Requires Node.js 22.13 or newer. There are no npm dependencies.
 
 ```powershell
 npm start
@@ -72,6 +77,14 @@ npm start
 ```
 
 `npm start` runs the zero-dependency bridge in `server.js`, serves the static folio, and enables the authorization gate. Use `PORT` and `HOST` to change the listener.
+
+Run the test suite with:
+
+```powershell
+npm test
+```
+
+The tests use Node's built-in `node:test` runner and cover OAuth helpers, session isolation and revocation, snapshot ownership and deletion, and commit attribution.
 
 ### GitHub OAuth app (required)
 
@@ -95,49 +108,116 @@ Copy `.env.example` to `.env`; `.env` is ignored by git.
 | `GITHUB_SCOPE` | `repo read:org read:user user:email gist` | OAuth scopes; `repo` is required for private repositories |
 | `PORT` | `8080` | Bridge listener port |
 | `HOST` | `127.0.0.1` | Bridge listener address |
-| `ALLOW_LOCAL_AUTH` | enabled only on loopback | Adopt the local `gh` token |
-| `SESSION_TTL_HOURS` | `12` | In-memory server session lifetime |
+| `ALLOW_LOCAL_AUTH` | enabled only on loopback | Adopt the local `gh` token; set to `0` on shared or proxied hosts |
+| `SESSION_TTL_HOURS` | `12` | Fixed lifetime of a persistent server session |
 | `SNAPSHOT_FRESH_MS` | `60000` | Skip a page-load rescan when the stored snapshot is newer than this; explicit refreshes and detected changes still scan |
-| `SNAPSHOT_ENCRYPTION_KEY` | generated under `data/` for development | 32 bytes (base64 or 64 hex chars) used to encrypt snapshots at rest; required in production |
+| `SNAPSHOT_ENCRYPTION_KEY` | generated under `data/` for development | 32 bytes (base64 or 64 hex chars) used to encrypt snapshots and session tokens; required in production |
 | `LOGBOOK_DATA_DIR` | `./data` | Directory for `logbook.sqlite` and the development key |
+| `TRUST_PROXY` | `0` | Set to `1` only behind a trusted reverse proxy so client IPs and rate limits use `X-Forwarded-For` |
+| `CSP_ENABLED` | `1` | Nonce-based Content Security Policy; set to `0` only for local debugging |
+| `INCLUDE_BOTS` | `0` | Include bot/automation commits in analytics |
+| `INCLUDE_MERGE_COMMITS` | `0` | Include merge commits in analytics |
+| `NODE_ENV` | unset | Set to `production` to enable production startup warnings |
 
 ## Security model
 
-- **No token in the page for server sessions.** OAuth and local `gh` tokens live in the bridge's in-memory session map. The browser receives only an `HttpOnly`, `SameSite=Lax` session cookie.
+- **No token in the page for server sessions.** OAuth and local `gh` tokens are stored only on the server, encrypted with AES-256-GCM. The browser receives an `HttpOnly`, `SameSite=Lax` session cookie (with `Secure` on HTTPS). Session IDs are stored as hashes.
 - **Authorization before any fetch.** The page probes `/api/session` and shows the username-first consent gate before requesting GitHub account data.
-- **Account binding.** The requested username is stored with the one-time OAuth state. The callback rejects authorization when the GitHub account that consented does not match that username.
-- **No private payload persistence in the browser.** Private accounts and repository payloads are never written to `localStorage` or `sessionStorage`. Only public telemetry is cached in the browser, for up to six hours.
-- **Encrypted server snapshots.** Normalized private snapshots live in SQLite encrypted with AES-256-GCM and authenticated against the GitHub account ID. Rotate `SNAPSHOT_ENCRYPTION_KEY` by clearing `data/` or re-scanning after re-encryption.
-- **OAuth state + PKCE.** The bridge stores a one-time `state` and PKCE verifier, sets an `HttpOnly` state cookie, verifies both on callback, and exchanges the code server-side.
+- **Account binding.** The requested username is stored with the one-time OAuth state. The callback rejects authorization when the GitHub account that consented does not match that username. Authorizing a different account explicitly revokes the current bridge session first.
+- **OAuth state + PKCE.** The bridge stores a one-time `state` and PKCE verifier, sets an `HttpOnly` state cookie, verifies both on callback, and exchanges the code server-side. Return URLs are validated to prevent open redirects.
+- **CSRF and origin checks.** Every state-changing API call requires a session-derived `X-Logbook-CSRF` header, `X-Logbook-Auth: 1`, and a same-origin `Origin`/`Sec-Fetch-Site` when present. Cross-origin mutations are rejected.
+- **No private payload persistence in the browser.** Private accounts and repository payloads are never written to `localStorage` or `sessionStorage`. Only public telemetry is cached in the browser, for up to six hours. Preferences for bridge sessions are stored server-side and partitioned by GitHub account; browser `localStorage` preferences are used only in public/static mode.
+- **Encrypted server snapshots.** Normalized private snapshots live in SQLite encrypted with AES-256-GCM and authenticated against the GitHub account ID. Responses use ETags so unchanged polls do not decrypt the snapshot.
+- **Security headers.** Responses set CSP with per-request script nonces, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, COOP/CORP, and `X-Robots-Tag`. HTTPS requests also receive HSTS. Static serving blocks `.env`, `.git`, `node_modules`, `server.js`, dot-segment traversal, and non-whitelisted file types.
+- **Rate limits.** The bridge limits API requests per IP, authorization attempts per IP, sync requests per account, and exports per account. SSE connections are capped at four tabs per account.
+- **Audit and data controls.** Login, logout, mismatches, revocation, export, and deletion are recorded in an audit log (retained 90 days). Accounts can export all stored data or permanently delete it from the UI. Deletion removes snapshots, sync jobs, sessions, preferences, and audit records.
 - **Read-only proxy.** `/api/gh/*` accepts `GET` only and forwards a GitHub token from the server session. It is not an open proxy: a valid session is required.
-- **Mutation guard.** Local authorization and logout require the `X-Logbook-Auth: 1` header and a same-origin `Origin` when one is present.
-- **Header hygiene.** Responses set `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and `Permissions-Policy`. Static serving blocks `.env`, `.git`, `node_modules`, `server.js`, dot-segment traversal, and non-whitelisted file types.
-- **Scope caveat.** GitHub's classic OAuth app scopes do not offer a read-only private-repository scope. The default `repo` scope technically grants write capability, even though Logbook only issues `GET` requests. For least privilege, use a read-only fine-grained personal access token or a dedicated account.
+- **Scope caveat.** GitHub's classic OAuth app scopes do not offer a read-only private-repository scope. The default `repo` scope technically grants write capability, even though Logbook only issues reads and a read-only GraphQL query. For least privilege, use a read-only fine-grained personal access token or a dedicated account.
 
-The bridge is intentionally small and single-process: sessions are in memory and are lost on restart, while encrypted account snapshots are persisted under `LOGBOOK_DATA_DIR`. For a multi-user production deployment, use HTTPS, set `ALLOW_LOCAL_AUTH=0`, keep `GITHUB_CLIENT_SECRET` server-side, and put the process behind a reverse proxy or process manager. If you need sessions to survive restarts or scale across processes, replace the in-memory maps with a shared session store.
+### Account deletion
 
-**Reverse-proxy warning:** local `gh` authorization adopts the server owner's token. It is enabled automatically only when `HOST` is a loopback address, which is convenient for local development but dangerous if you expose that loopback listener through a public reverse proxy. Set `ALLOW_LOCAL_AUTH=0` on any proxied or shared host; the example `.env` starts with it disabled.
+The footer's **Sessions & data controls** panel can delete the current account's Logbook data. The action requires typing `DELETE` in the confirmation dialog. It removes:
+
+- the encrypted snapshot and sync-job history,
+- all sessions for the account,
+- server-side preferences and saved views,
+- audit records for the account,
+- the session cookie in the current browser.
+
+Deletion removes Logbook's copy of the data but does **not** revoke the OAuth app authorization on GitHub. Revoke the app separately at <https://github.com/settings/applications> if you want to remove that grant. A later authorization creates a fresh session and snapshot.
+
+## Bridge API
+
+| Route | Purpose |
+|---|---|
+| `GET /healthz`, `GET /livez` | Liveness probe |
+| `GET /readyz` | Readiness probe; checks SQLite storage |
+| `GET /api/session` | Public session state, CSRF token, scopes, session metadata |
+| `GET /api/sessions` | List sessions for the current account |
+| `POST /api/sessions/revoke` | Revoke one session, all other sessions, or every session |
+| `GET /api/preferences`, `PUT /api/preferences` | Read or write account-scoped UI preferences |
+| `GET /api/export` | Download the normalized snapshot as JSON with export metadata |
+| `DELETE /api/account` | Permanently delete all Logbook data for the account |
+| `GET /api/status` | Version, session, snapshot, sync, and recent audit status |
+| `GET /api/events` | Server-Sent Events stream for sync progress |
+| `GET /api/snapshot` | Normalized snapshot; supports `commit_limit` and `cursor` |
+| `POST /api/sync`, `GET /api/sync`, `DELETE /api/sync` | Queue, inspect, or cancel an account scan |
+| `GET /api/gh/*` | Read-only GitHub REST proxy |
+| `POST /api/auth/local` | Adopt a local `gh` token when enabled |
+| `POST /api/logout` | Revoke the current session |
+| `GET /auth/github`, `GET /auth/github/callback` | OAuth start and callback |
+| `GET /auth/logout`, `GET /logout` | Cookie-based session logout |
+
+Mutating routes require the CSRF and origin headers described above. Health probes are intentionally unauthenticated.
 
 ## Deployment
 
 ### Static hosting (GitHub Pages)
 
-Static hosting can run the folio, but not the Node bridge. If no bridge answers and no token is stored, the page opens the public-only ledger automatically. Open the account dossier to add a personal access token or reopen the authorization gate; OAuth and local `gh` authorization remain unavailable. Unauthenticated GitHub requests are limited to 60/hour per IP, and only public data is available.
+Static hosting can run the folio, but not the Node bridge. If no bridge answers and no token is stored, the page opens the public-only ledger automatically. Open the account dossier to add a personal access token or reopen the authorization gate; OAuth and local `gh` authorization remain unavailable. The personal access token is held in `sessionStorage` only. Unauthenticated GitHub requests are limited to 60/hour per IP, and only public data is available.
 
 ### Node hosting
 
 Serve the repository root with `npm start` (or `node server.js`) behind HTTPS. Set the OAuth callback and `GITHUB_CALLBACK_URL` to the public HTTPS URL, set `HOST=0.0.0.0` if the reverse proxy connects over the network, and set `ALLOW_LOCAL_AUTH=0`. The frontend uses absolute `/api` and `/auth` paths, so serve it at the origin root unless you adapt those paths.
 
+For production:
+
+1. Set `NODE_ENV=production` and provide a stable `SNAPSHOT_ENCRYPTION_KEY`.
+2. Mount `LOGBOOK_DATA_DIR` on a persistent volume and back up `logbook.sqlite` (plus its WAL files) with the service stopped or using SQLite's backup API.
+3. Set `ALLOW_LOCAL_AUTH=0` and use an HTTPS callback.
+4. Set `TRUST_PROXY=1` only when every request arrives through a trusted reverse proxy that overwrites `X-Forwarded-For`; otherwise clients can spoof rate-limit identities.
+5. Probe `/healthz` for liveness and `/readyz` for readiness.
+6. Send `SIGTERM` for graceful shutdown; the listener, SSE clients, and SQLite handles close cleanly.
+
+The bridge is intentionally single-process. SQLite in WAL mode supports the web process and its background scan jobs, but there is no shared job queue or cross-process session lock. For horizontal scaling, replace the SQLite session/snapshot stores and in-process scan queue with shared services. Running multiple bridge processes against the same `logbook.sqlite` is not recommended.
+
+Changing `SNAPSHOT_ENCRYPTION_KEY` makes existing sessions and snapshots unreadable. There is no in-place re-encryption tool: stop the service, remove the SQLite files (or restore a backup encrypted with the old key), and let accounts re-authorize and re-scan.
+
+**Reverse-proxy warning:** local `gh` authorization adopts the server owner's token. It is enabled automatically only when `HOST` is a loopback address, which is convenient for local development but dangerous if you expose that loopback listener through a public reverse proxy. Set `ALLOW_LOCAL_AUTH=0` on any proxied or shared host; the example `.env` starts with it disabled.
+
 The real OAuth token exchange requires a registered OAuth app; it cannot be completed from GitHub Pages or from a static file server.
 
 ## Rate limits and caching
 
+GitHub:
+
 - Unauthenticated: **60 requests/hour per IP**.
 - A token or bridge session: **5,000 requests/hour**.
-- One cold authenticated load costs roughly `10 + 2 × repositories scanned` requests: profile, repository pages, two calls per deep repository (commits + languages), newest-commit detail, three search counts, and account extras. Incremental scans cost one repository-list call plus two calls only for repositories whose `pushed_at`, `size`, branch, or archive state changed.
-- Public payloads are cached in the browser for **6 hours**. Private payloads are stored only as encrypted server snapshots. Repeat polls compare the snapshot timestamp and `ETag`, so an unchanged snapshot costs one indexed SQLite lookup and no decryption.
-- The footer shows the remaining request budget and reset time when GitHub reports it.
-- `MAX_DEEP_REPOS = 100` and `CONCURRENCY = 6` bound the scan.
+
+Bridge guards:
+
+- **300 API requests/minute per IP**.
+- **20 authorization attempts/minute per IP**.
+- **20 sync requests/minute per account**.
+- **10 exports/minute per account**.
+
+A cold authenticated load costs roughly `10 + 2 × repositories scanned` requests: profile, repository pages, verified emails, two calls per deep repository (commits + languages), newest-commit detail, three search counts, account extras, and up to three GraphQL calendar years. Incremental scans cost one repository-list call plus two calls only for repositories whose `pushed_at`, `size`, default branch, or archive state changed.
+
+- Public payloads are cached in the browser for **6 hours**. Private payloads are stored only as encrypted server snapshots.
+- Repeat polls compare the snapshot ETag and `ETag`/repository signature, so an unchanged snapshot costs one indexed SQLite lookup and no decryption.
+- The visible tab performs a conditional repository check every **60 seconds**; SSE carries sync progress while connected.
+- The footer shows the remaining GitHub request budget and reset time when GitHub reports it.
+- `MAX_DEEP_REPOS = 100` and `CONCURRENCY = 6` bound the scan. Incremental commit scans stop at 300 fresh commits per repository and mark the history as truncated.
 
 ## Verified locally
 
@@ -146,16 +226,24 @@ The real OAuth token exchange requires a registered OAuth app; it cannot be comp
 - Sign-out destroys the server session and returns to the gate.
 - An invalid token is rejected with `401` and is not stored.
 - OAuth redirect generation, state cookie, PKCE challenge, callback routing, and error handling were exercised with placeholder credentials. A real code exchange requires a registered OAuth app.
+- All **37** automated tests pass under Node's `node:test` runner.
 
 ## Features
 
-- Light / dark theming with CSS custom properties
+- Light / dark / system theming with CSS custom properties, persisted per account
+- Comfortable / compact density, persisted per account
+- Named saved views for filter sets, plus URL-backed filter state
+- Session manager with device metadata, per-session revocation, and “sign out other sessions”
+- Account data export and explicit account deletion
+- Live sync via SSE with a 60-second conditional polling fallback
+- Metric glossary covering definitions, attribution, scope, and limits
 - Command palette (`⌘K` / `Ctrl+K`) over sections, repositories, and actions
 - Keyboard navigation: `J`/`K` rows, `Enter` inspect, `1`–`5` timeframe, `T` theme, `/` search, `Esc` clear
 - Web Audio tactile click/tick feedback (mutable)
 - CSV / JSON export of the filtered repository ledger
 - Print stylesheet for a physical folio
 - Responsive layout; heatmap and punch card scroll horizontally on narrow viewports
+- Accessible heatmap cells, dialogs with focus handling, and reduced-motion support
 
 ## License
 
