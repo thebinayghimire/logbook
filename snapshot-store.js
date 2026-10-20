@@ -10,7 +10,8 @@ class SnapshotStore {
     this.dataDir = options.dataDir;
     fs.mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
     this.key = loadKey(this.dataDir, options.encryptionKey);
-    this.db = new DatabaseSync(path.join(this.dataDir, "logbook.sqlite"));
+    this.dbPath = path.join(this.dataDir, "logbook.sqlite");
+    this.db = new DatabaseSync(this.dbPath);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
@@ -53,6 +54,35 @@ class SnapshotStore {
         progress=excluded.progress, error=excluded.error, updated_at=excluded.updated_at
     `);
     this.selectLatestJob = this.db.prepare("SELECT * FROM sync_jobs WHERE account_id = ? ORDER BY updated_at DESC LIMIT 1");
+    this.selectHead = this.db.prepare("SELECT content_hash, updated_at FROM snapshots WHERE account_id = ?");
+    this.deleteSnapshotStmt = this.db.prepare("DELETE FROM snapshots WHERE account_id = ?");
+    this.deleteJobsStmt = this.db.prepare("DELETE FROM sync_jobs WHERE account_id = ?");
+    this.countSnapshotsStmt = this.db.prepare("SELECT COUNT(*) AS n FROM snapshots");
+    this.recoverStaleJobs();
+  }
+
+  /**
+   * Scans run in the web process, so a crash or restart can leave a job in a
+   * non-terminal state forever. Convert those to a terminal failure on boot so
+   * the UI never polls a phantom scan and the next request queues a fresh one.
+   */
+  recoverStaleJobs() {
+    const result = this.db.prepare(`
+      UPDATE sync_jobs
+         SET state='failed', phase='failed',
+             error=COALESCE(error, 'Server restarted before the scan completed'),
+             updated_at=?
+       WHERE state IN ('queued','scanning')
+    `).run(Date.now());
+    if (Number(result.changes) > 0) {
+      console.warn(`[logbook] marked ${result.changes} interrupted sync job(s) as failed`);
+    }
+  }
+
+  /** Cheap metadata lookup used for ETag checks before decrypting a snapshot. */
+  head(accountId) {
+    const row = this.selectHead.get(String(accountId));
+    return row ? { contentHash: row.content_hash, updatedAt: row.updated_at } : null;
   }
 
   get(accountId) {
@@ -99,19 +129,44 @@ class SnapshotStore {
       error: row.error, createdAt: row.created_at, updatedAt: row.updated_at
     };
   }
+
+  /**
+   * Permanent deletion of everything Logbook stores for one GitHub account.
+   * Audit records are owned by the session store and are scrubbed there.
+   */
+  deleteAccount(accountId) {
+    const id = String(accountId);
+    const snapshots = Number(this.deleteSnapshotStmt.run(id).changes);
+    const jobs = Number(this.deleteJobsStmt.run(id).changes);
+    return { snapshots, jobs };
+  }
+
+  stats() {
+    return { snapshots: Number(this.countSnapshotsStmt.get().n) };
+  }
+
+  health() {
+    try {
+      this.db.prepare("SELECT 1 AS ok").get();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
 }
 
 function digest(value) {
-  return crypto.createHash("sha256").update(value).digest("base64url");
+  return crypto.createHash("sha256").update(String(value == null ? "" : value)).digest("base64url");
 }
 
 function hashSections(payload) {
+  const stable = (value) => JSON.stringify(value) || "null";
   return {
-    profile: digest(JSON.stringify([payload.profile, payload.privateRepos, payload.publicRepos])),
-    repositories: digest(JSON.stringify([payload.repos, payload.deepRepos, payload.repoCommits])),
-    commits: digest(JSON.stringify([payload.commits, payload.prs, payload.issues, payload.reviews])),
-    languages: digest(JSON.stringify([payload.langTotals, payload.langRepos])),
-    account: digest(JSON.stringify(payload.account))
+    profile: digest(stable([payload.profile, payload.privateRepos, payload.publicRepos])),
+    repositories: digest(stable([payload.repos, payload.deepRepos, payload.repoCommits])),
+    commits: digest(stable([payload.commits, payload.prs, payload.issues, payload.reviews, payload.contributionCalendar])),
+    languages: digest(stable([payload.langTotals, payload.langRepos, payload.repoLanguages])),
+    account: digest(stable(payload.account))
   };
 }
 
@@ -125,12 +180,26 @@ function loadKey(dataDir, configured) {
   const keyPath = path.join(dataDir, ".snapshot-key");
   try {
     const existing = Buffer.from(fs.readFileSync(keyPath, "utf8").trim(), "base64");
-    if (existing.length === 32) return existing;
-  } catch (_) {}
+    if (existing.length !== 32) {
+      throw new Error(`Development snapshot key at ${keyPath} is invalid; delete it and restart`);
+    }
+    return existing;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
   const generated = crypto.randomBytes(32);
-  fs.writeFileSync(keyPath, generated.toString("base64"), { mode: 0o600, flag: "wx" });
-  console.warn("[logbook] SNAPSHOT_ENCRYPTION_KEY is unset; generated a development key in data/.snapshot-key");
-  return generated;
+  try {
+    fs.writeFileSync(keyPath, generated.toString("base64"), { mode: 0o600, flag: "wx" });
+    console.warn(`[logbook] SNAPSHOT_ENCRYPTION_KEY is unset; generated a development key at ${keyPath}`);
+    return generated;
+  } catch (error) {
+    // Another instance may have created the key between the read and write.
+    if (error.code === "EEXIST") {
+      const existing = Buffer.from(fs.readFileSync(keyPath, "utf8").trim(), "base64");
+      if (existing.length === 32) return existing;
+    }
+    throw error;
+  }
 }
 
-module.exports = { SnapshotStore, hashSections };
+module.exports = { SnapshotStore, hashSections, loadKey };

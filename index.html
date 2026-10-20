@@ -230,6 +230,31 @@
     .tabular-nums {
       font-variant-numeric: tabular-nums;
     }
+    .sr-only {
+      position: absolute !important;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0);
+      white-space: nowrap; border: 0;
+    }
+    :focus-visible {
+      outline: 2px solid var(--c-secondary);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+      }
+      .hm-cell:hover { transform: none; }
+    }
+    @media (forced-colors: active) {
+      .hm-cell, .bar-anim { forced-color-adjust: none; }
+    }
+    html.density-compact .repo-row td { padding-top: 0.35rem !important; padding-bottom: 0.35rem !important; }
+    html.density-compact #push-log-timeline { row-gap: 0.9rem; }
   </style>
 </head>
 <body class="bg-surface text-on-surface selection:bg-primary selection:text-surface antialiased min-h-screen flex flex-col paper-grain">
@@ -271,6 +296,9 @@
               </button>
             </div>
             <div class="font-label-mono text-[10px] text-on-surface-variant mt-3 min-h-[1.25rem]" id="auth-gate-status" role="status" aria-live="polite">ENTER YOUR USERNAME TO CONTINUE</div>
+            <button class="hidden mt-3 border border-outline-variant/70 hover:border-secondary hover:text-secondary px-3 py-2 font-label-mono text-[10px] uppercase transition-colors" id="btn-local-auth" type="button">
+              Use the GitHub CLI session on this machine
+            </button>
           </form>
 
           <div class="mt-8 border-y border-outline-variant/50 grid grid-cols-3 divide-x divide-outline-variant/40 max-w-xl">
@@ -295,6 +323,12 @@
               <li class="flex gap-2"><span class="text-secondary">01</span><span>Profile, organizations, followers, and starred work.</span></li>
               <li class="flex gap-2"><span class="text-secondary">02</span><span>Public and accessible private repositories.</span></li>
               <li class="flex gap-2"><span class="text-secondary">03</span><span>Commit rhythm, languages, issues, and pull requests.</span></li>
+            </ul>
+          </div>
+          <div class="mt-6 border-t border-outline-variant/50 pt-4">
+            <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">PERMISSIONS IN PLAIN LANGUAGE</div>
+            <ul class="mt-2 space-y-1.5 font-body-sm text-[12px] leading-relaxed text-on-surface-variant" id="auth-permissions">
+              <li>Permissions appear here after the server reports its OAuth configuration.</li>
             </ul>
           </div>
           <div class="mt-6 border-t border-outline-variant/50 pt-4 font-label-mono text-[10px] leading-relaxed text-on-surface-variant" id="auth-setup-note">
@@ -865,9 +899,11 @@
               <div>
                 <span>Active days <strong class="text-on-surface font-semibold" id="hm-stat-active">214 of 293</strong></span>
                 <span class="mx-2">·</span>
-                <span><strong class="text-on-surface font-semibold" id="hm-stat-avg">3.1</strong> commits per active day</span>
+                <span><strong class="text-on-surface font-semibold" id="hm-stat-avg">3.1</strong> contributions per active day</span>
                 <span class="mx-2">·</span>
                 <span>Most active weekday: <strong class="text-on-surface font-semibold" id="hm-stat-weekday">Thursday</strong></span>
+                <span class="mx-2">·</span>
+                <span>Source: <strong class="text-on-surface font-semibold" id="hm-source">local scan</strong></span>
               </div>
               <div class="flex items-center space-x-2">
                 <span class="mr-1">Filter Density: Less</span>
@@ -1016,6 +1052,27 @@
               <button class="bg-primary text-surface px-2.5 py-1 font-semibold uppercase transition-colors" id="btn-view-ledger" type="button">Ledger</button>
               <button class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface cursor-pointer uppercase transition-colors" id="btn-view-lifespans" type="button">Lifespans</button>
             </div>
+          </div>
+        </div>
+
+        <!-- Saved views / filter presets. Filters are also encoded in the URL. -->
+        <div class="flex flex-wrap items-center justify-between gap-2 pb-4 mb-space-lg border-b border-outline-variant/30 font-label-mono text-[10px]">
+          <div class="flex flex-wrap items-center gap-2">
+            <label class="flex items-center gap-1.5 text-on-surface-variant">
+              <span class="uppercase tracking-wider">Saved view</span>
+              <select aria-label="Saved filter views" class="bg-transparent border border-outline-variant/60 px-2 py-1 text-on-surface focus:outline-none focus:border-secondary" id="saved-view-select">
+                <option value="">— none —</option>
+              </select>
+            </label>
+            <button class="border border-outline-variant/70 hover:border-primary px-2 py-1 uppercase text-on-surface transition-colors" id="btn-save-view" type="button">Save current</button>
+            <button class="border border-outline-variant/70 hover:border-secondary hover:text-secondary px-2 py-1 uppercase text-on-surface-variant transition-colors" id="btn-delete-view" type="button">Delete</button>
+          </div>
+          <div class="flex flex-wrap items-center gap-2 text-on-surface-variant">
+            <button class="underline underline-offset-4 hover:text-on-surface" id="btn-glossary" type="button">Metric definitions &amp; data scope</button>
+            <span class="opacity-40">·</span>
+            <button class="underline underline-offset-4 hover:text-on-surface" id="btn-copy-filter-link" type="button">Copy filter link</button>
+            <span class="opacity-40">·</span>
+            <button class="underline underline-offset-4 hover:text-on-surface" id="btn-reset-filters" type="button">Reset filters</button>
           </div>
         </div>
 
@@ -1214,6 +1271,9 @@
       <p class="tracking-wider uppercase">LOGBOOK · AWAITING GITHUB TELEMETRY · TABULAR REVISION 4.13</p>
       <div class="flex items-center space-x-md text-on-surface-variant">
         <button class="hover:text-on-surface underline underline-offset-4 uppercase" id="footer-btn-print" type="button">Print Folio</button>
+        <button class="hover:text-on-surface underline underline-offset-4 uppercase" id="footer-btn-glossary" type="button">Definitions</button>
+        <button class="hover:text-on-surface underline underline-offset-4 uppercase" id="footer-btn-sessions" type="button">Sessions</button>
+        <button class="hover:text-on-surface underline underline-offset-4 uppercase" id="footer-btn-density" type="button">Density</button>
         <span class="flex items-center space-x-xs">
           <span class="w-1.5 h-1.5 bg-secondary live-dot"></span>
           <span id="footer-status-text">INDEXED</span>
@@ -1230,7 +1290,7 @@
        ========================================================================= -->
 
   <!-- 1. COMMAND PALETTE MODAL (⌘K) -->
-  <div aria-hidden="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-20 px-4" id="cmd-palette-modal">
+  <div aria-hidden="true" aria-labelledby="cmd-input" aria-modal="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-20 px-4" id="cmd-palette-modal" role="dialog">
     <div class="w-full max-w-xl bg-surface border-2 border-primary text-on-surface">
       <div class="flex items-center px-3 py-2.5 border-b border-outline-variant/60">
         <span class="material-symbols-outlined text-[18px] text-secondary mr-2">terminal</span>
@@ -1248,7 +1308,7 @@
   </div>
 
   <!-- 2. GITHUB ACCOUNT + TOKEN MODAL -->
-  <div aria-hidden="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-20 px-4 pb-6 overflow-y-auto" id="profile-modal">
+  <div aria-hidden="true" aria-labelledby="profile-auth-status" aria-modal="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-20 px-4 pb-6 overflow-y-auto" id="profile-modal" role="dialog">
     <div class="w-full max-w-2xl bg-surface border-2 border-primary text-on-surface p-5">
       <div class="flex items-center justify-between gap-3 pb-3 border-b border-outline-variant/50 mb-4">
         <div class="flex items-center space-x-2">
@@ -1267,6 +1327,21 @@
       </p>
 
       <div id="account-dossier" class="mb-5"></div>
+
+      <div class="border-t border-outline-variant/50 pt-4 mb-4">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <span class="font-label-mono text-[10px] uppercase tracking-widest text-on-surface-variant">SESSION &amp; DATA CONTROLS</span>
+          <button class="font-label-mono text-[10px] uppercase border border-outline-variant/70 hover:border-secondary hover:text-secondary px-2 py-0.5 transition-colors" id="btn-open-sessions" type="button">Manage sessions</button>
+        </div>
+        <div class="border border-outline-variant/50 bg-surface-container-low p-3 font-mono-data text-[11px] text-on-surface-variant" id="session-summary">
+          No server session is active. Authorize GitHub to see session details.
+        </div>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 mt-3 font-label-mono text-[10px] uppercase">
+          <button class="underline underline-offset-4 hover:text-secondary" id="btn-export-account" type="button">Export all data</button>
+          <a class="underline underline-offset-4 hover:text-secondary" href="https://github.com/settings/applications" target="_blank" rel="noopener">Revoke on GitHub ↗</a>
+          <button class="text-secondary underline underline-offset-4 hover:text-on-surface" id="btn-delete-account" type="button">Delete Logbook data</button>
+        </div>
+      </div>
 
       <div class="border-t border-outline-variant/50 pt-4">
         <label class="block font-label-mono text-[10px] text-on-surface-variant uppercase mb-2" for="github-live-input">
@@ -1291,8 +1366,8 @@
           </button>
         </div>
         <div class="font-label-mono text-[10px] text-on-surface-variant mt-2">
-          Held in <code class="text-on-surface">sessionStorage</code> for this tab only — never written to the page or repository.
-          For a token that never reaches JavaScript, use <code class="text-on-surface">npm start</code> and the OAuth gate.
+          Held in memory for this tab only — never written to browser storage, the page, or the repository. It is lost on reload.
+          For a token that never reaches JavaScript at all, use <code class="text-on-surface">npm start</code> and the OAuth gate.
         </div>
       </div>
 
@@ -1303,10 +1378,10 @@
   </div>
 
   <!-- 3. KEYBOARD SHORTCUTS MODAL (?) -->
-  <div aria-hidden="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-center justify-center px-4" id="shortcuts-modal">
+  <div aria-hidden="true" aria-labelledby="shortcuts-modal-title" aria-modal="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-center justify-center px-4" id="shortcuts-modal" role="dialog">
     <div class="w-full max-w-md bg-surface border-2 border-primary text-on-surface p-5">
       <div class="flex items-center justify-between pb-3 border-b border-outline-variant/50 mb-4">
-        <span class="font-label-mono-bold uppercase tracking-widest">KEYBOARD TELEMETRY NAVIGATION</span>
+        <span class="font-label-mono-bold uppercase tracking-widest" id="shortcuts-modal-title">KEYBOARD TELEMETRY NAVIGATION</span>
         <button class="font-label-mono text-label-mono hover:text-secondary" id="btn-close-shortcuts" type="button">[×]</button>
       </div>
       <div class="space-y-2.5 font-mono-data text-body-sm">
@@ -1317,6 +1392,42 @@
         <div class="flex justify-between py-1 border-b border-outline-variant/30"><span>Switch Timeframe (7D–ALL)</span><kbd class="px-1.5 py-0.5 bg-surface-container border border-outline-variant/60 text-[11px]">1 – 5</kbd></div>
         <div class="flex justify-between py-1 border-b border-outline-variant/30"><span>Toggle Rag Paper / Night Theme</span><kbd class="px-1.5 py-0.5 bg-surface-container border border-outline-variant/60 text-[11px]">T</kbd></div>
         <div class="flex justify-between py-1"><span>Clear Active Filters / Close Modals</span><kbd class="px-1.5 py-0.5 bg-surface-container border border-outline-variant/60 text-[11px]">ESC</kbd></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. SESSION MANAGEMENT MODAL -->
+  <div aria-hidden="true" aria-labelledby="session-modal-title" aria-modal="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-20 px-4 pb-6 overflow-y-auto" id="session-modal" role="dialog">
+    <div class="w-full max-w-2xl bg-surface border-2 border-primary text-on-surface p-5">
+      <div class="flex items-center justify-between gap-3 pb-3 border-b border-outline-variant/50 mb-4">
+        <span class="font-label-mono-bold uppercase tracking-widest" id="session-modal-title">SESSIONS &amp; AUTHORIZATION</span>
+        <button class="font-label-mono text-label-mono hover:text-secondary" id="btn-close-sessions" type="button">[x]</button>
+      </div>
+      <p class="font-body-sm text-body-sm text-on-surface-variant mb-3">
+        Every session can read this account's snapshot. Revoke sessions you do not recognize. Changing a GitHub password or revoking the OAuth app on GitHub also invalidates access.
+      </p>
+      <div class="border border-outline-variant/60 divide-y divide-outline-variant/40" id="session-list">
+        <div class="p-3 font-mono-data text-[11px] text-on-surface-variant">Loading sessions…</div>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-2 mt-4 pt-3 border-t border-outline-variant/50">
+        <button class="border border-outline-variant/70 hover:border-secondary hover:text-secondary px-3 py-1.5 font-label-mono text-[10px] uppercase" id="btn-revoke-others" type="button">Sign out other sessions</button>
+        <button class="bg-primary text-surface hover:bg-secondary px-3 py-1.5 font-label-mono text-[10px] uppercase font-semibold" id="btn-sign-out-everywhere" type="button">Sign out everywhere</button>
+      </div>
+      <div class="mt-3 font-label-mono text-[9px] text-on-surface-variant leading-relaxed">
+        Tokens stay encrypted on the server. Logbook never stores a GitHub token in browser storage for a bridge session.
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. METRIC DEFINITIONS / DATA SCOPE MODAL -->
+  <div aria-hidden="true" aria-labelledby="glossary-modal-title" aria-modal="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-20 px-4 pb-6 overflow-y-auto" id="glossary-modal" role="dialog">
+    <div class="w-full max-w-2xl bg-surface border-2 border-primary text-on-surface p-5">
+      <div class="flex items-center justify-between gap-3 pb-3 border-b border-outline-variant/50 mb-4">
+        <span class="font-label-mono-bold uppercase tracking-widest" id="glossary-modal-title">METRIC DEFINITIONS &amp; DATA SCOPE</span>
+        <button class="font-label-mono text-label-mono hover:text-secondary" id="btn-close-glossary" type="button">[x]</button>
+      </div>
+      <div class="space-y-3 font-body-sm text-body-sm text-on-surface-variant" id="glossary-content">
+        <p>Data is loading. Definitions cover commits, active days, streaks, reviews, code volume, and repository activity.</p>
       </div>
     </div>
   </div>
@@ -1520,8 +1631,23 @@
     liveSyncSignature: "",
     liveSyncBackoffUntil: 0,
     snapshotETag: "",
+    snapshotAt: 0,
     snapshotSections: null,
     serverSyncPolling: false,
+    kioskActive: false,
+    portfolioActive: false,
+    csrfToken: "",
+    sessionInfo: null,
+    accountStatus: null,
+    preferences: {},
+    savedViews: [],
+    eventSource: null,
+    eventSourceFailures: 0,
+    snapshotApplying: false,
+    urlApplied: false,
+    lastFocus: null,
+    density: "comfortable",
+    theme: "system",
     error: null,
     rate: null,
     patchCache: {},
@@ -1557,6 +1683,252 @@
     var h = { "Accept": "application/vnd.github+json" };
     if (state.mode === "token" && state.token) h["Authorization"] = "Bearer " + state.token;
     return h;
+  }
+
+  // State-changing bridge calls require a custom header plus a CSRF token
+  // derived for this session. If the token is stale (for example after a
+  // server-side session rotation) refresh /api/session once and retry.
+  async function fetchSessionState() {
+    var res = await fetch(AUTH_API + "/session", {
+      headers: { "Accept": "application/json" },
+      credentials: "same-origin",
+      cache: "no-store"
+    });
+    if (!res.ok) return null;
+    var data = null;
+    try { data = await res.json(); } catch (e) { return null; }
+    if (data && data.csrfToken) state.csrfToken = data.csrfToken;
+    if (data && data.authorized) state.sessionInfo = data;
+    return data;
+  }
+
+  async function apiFetch(path, options) {
+    options = options || {};
+    function go() {
+      var headers = Object.assign(
+        { "Accept": "application/json", "X-Logbook-Auth": "1" },
+        options.headers || {}
+      );
+      if (state.csrfToken) headers["X-Logbook-CSRF"] = state.csrfToken;
+      return fetch(AUTH_API + path, {
+        method: options.method || "GET",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: headers,
+        body: options.body
+      });
+    }
+    var res = await go();
+    if (res.status === 403) {
+      var clone = res.clone();
+      var data = null;
+      try { data = await clone.json(); } catch (e) {}
+      if (data && (data.code === "csrf" || data.code === "origin_rejected")) {
+        var previous = state.csrfToken;
+        var refreshed = await fetchSessionState();
+        if (refreshed && refreshed.csrfToken && previous !== refreshed.csrfToken) {
+          res = await go();
+        }
+      }
+    }
+    return res;
+  }
+
+  function apiJson(path, options) {
+    return apiFetch(path, options).then(function (res) {
+      return res.text().then(function (text) {
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) {}
+        if (!res.ok) {
+          var error = new Error((data && (data.message || data.error)) || ("Bridge " + res.status));
+          error.status = res.status;
+          error.code = data && data.error;
+          throw error;
+        }
+        return data;
+      });
+    });
+  }
+
+  var prefsTimer = null;
+  function persistedPreferences() {
+    return {
+      theme: state.theme,
+      density: state.density,
+      range: state.currentRange,
+      savedViews: state.savedViews,
+      activeView: state.preferences.activeView || ""
+    };
+  }
+
+  function persistPreferences() {
+    if (prefsTimer) clearTimeout(prefsTimer);
+    prefsTimer = setTimeout(function () {
+      var values = persistedPreferences();
+      state.preferences = Object.assign({}, state.preferences, values);
+      if (usingServerAuth()) {
+        apiJson("/preferences", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ values: values })
+        }).catch(function () { /* a preference write must never break the dashboard */ });
+      } else {
+        try { localStorage.setItem("logbook:preferences:v1", JSON.stringify(values)); } catch (e) {}
+      }
+    }, 350);
+  }
+
+  async function loadPreferences() {
+    if (usingServerAuth()) {
+      try {
+        var data = await apiJson("/preferences");
+        state.preferences = (data && data.values) || {};
+      } catch (e) {
+        state.preferences = {};
+      }
+    } else {
+      try { state.preferences = JSON.parse(localStorage.getItem("logbook:preferences:v1") || "{}") || {}; } catch (e) { state.preferences = {}; }
+    }
+    state.savedViews = Array.isArray(state.preferences.savedViews) ? state.preferences.savedViews.slice(0, 30) : [];
+    state.currentRange = state.preferences.range || state.currentRange;
+    setThemeMode(state.preferences.theme || "system", false);
+    applyDensity(state.preferences.density || "comfortable", false);
+    renderSavedViews();
+  }
+
+  function applyTheme(mode) {
+    var dark = mode === "dark";
+    if (mode === "system" && window.matchMedia) {
+      dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+    document.documentElement.classList.toggle("dark", dark);
+    setText("theme-icon", dark ? "dark_mode" : "light_mode");
+    var btn = document.getElementById("btn-theme-toggle");
+    if (btn) btn.title = "Theme: " + mode + " (click to toggle light/dark)";
+  }
+
+  function setThemeMode(mode, persist) {
+    state.theme = mode || "system";
+    applyTheme(state.theme);
+    if (persist !== false) persistPreferences();
+  }
+
+  function applyDensity(density, persist) {
+    state.density = density === "compact" ? "compact" : "comfortable";
+    document.documentElement.classList.toggle("density-compact", state.density === "compact");
+    if (persist !== false) persistPreferences();
+  }
+
+  function renderSavedViews() {
+    var select = document.getElementById("saved-view-select");
+    if (!select) return;
+    var current = state.preferences.activeView || "";
+    var html = '<option value="">— none —</option>';
+    state.savedViews.forEach(function (view) {
+      html += '<option value="' + escapeHtml(view.name) + '">' + escapeHtml(view.name) + '</option>';
+    });
+    select.innerHTML = html;
+    select.value = state.savedViews.some(function (v) { return v.name === current; }) ? current : "";
+  }
+
+  function currentFilterState() {
+    return {
+      q: document.getElementById("repo-search-input").value || "",
+      lang: document.getElementById("filter-lang").value || "ALL",
+      type: document.getElementById("filter-type").value || "ALL",
+      vis: document.getElementById("filter-vis").value || "ALL",
+      sort: document.getElementById("filter-sort").value || "pushed",
+      repo: state.globalRepoFilter || "",
+      range: state.currentRange,
+      view: state.repoViewMode
+    };
+  }
+
+  function applyFilterState(values, options) {
+    options = options || {};
+    values = values || {};
+    var search = document.getElementById("repo-search-input");
+    if (search && typeof values.q === "string") search.value = values.q;
+    setSelectValue("filter-lang", values.lang || "ALL");
+    setSelectValue("filter-type", values.type || "ALL");
+    setSelectValue("filter-vis", values.vis || "ALL");
+    setSelectValue("filter-sort", values.sort || "pushed");
+    state.globalRepoFilter = values.repo || null;
+    if (values.repo) {
+      state.pushRepoFilter = values.repo;
+      setSelectValue("push-repo-select", values.repo);
+    }
+    if (values.range) {
+      state.currentRange = values.range;
+      renderRangeData(values.range);
+    }
+    state.visibleRepoLimit = Math.max(10, state.visibleRepoLimit);
+    if (options.render !== false) {
+      renderRepositories();
+      updateGlobalFilterBanner();
+      renderPushLog();
+    }
+    if (options.url !== false) syncUrlState();
+  }
+
+  function setSelectValue(id, value) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var exists = Array.prototype.some.call(el.options, function (o) { return o.value === value; });
+    el.value = exists ? value : "ALL";
+  }
+
+  function markFilterChanged() {
+    state.preferences.activeView = "";
+    renderSavedViews();
+    syncUrlState();
+    persistPreferences();
+  }
+
+  function updateGlobalFilterBanner() {
+    var banner = document.getElementById("active-filter-banner");
+    var text = document.getElementById("active-filter-text");
+    if (!banner || !text) return;
+    if (!state.globalRepoFilter) {
+      banner.classList.add("hidden");
+      return;
+    }
+    banner.classList.remove("hidden");
+    text.textContent = "REPOSITORY · " + state.globalRepoFilter;
+  }
+
+  function syncUrlState() {
+    if (!window.history || !history.replaceState) return;
+    var f = currentFilterState();
+    var params = new URLSearchParams();
+    if (f.q) params.set("q", f.q);
+    if (f.lang && f.lang !== "ALL") params.set("lang", f.lang);
+    if (f.type && f.type !== "ALL") params.set("type", f.type);
+    if (f.vis && f.vis !== "ALL") params.set("vis", f.vis);
+    if (f.sort && f.sort !== "pushed") params.set("sort", f.sort);
+    if (f.repo) params.set("repo", f.repo);
+    if (f.range && f.range !== "90D") params.set("range", f.range);
+    if (f.view && f.view !== "ledger") params.set("view", f.view);
+    var query = params.toString();
+    history.replaceState(history.state || {}, "", window.location.pathname + (query ? "?" + query : "") + (window.location.hash || ""));
+  }
+
+  function applyUrlState() {
+    if (state.urlApplied) return;
+    state.urlApplied = true;
+    var params = new URLSearchParams(window.location.search);
+    var values = {
+      q: params.get("q") || "",
+      lang: params.get("lang") || "ALL",
+      type: params.get("type") || "ALL",
+      vis: params.get("vis") || "ALL",
+      sort: params.get("sort") || "pushed",
+      repo: params.get("repo") || "",
+      range: params.get("range") || state.currentRange,
+      view: params.get("view") || "ledger"
+    };
+    applyFilterState(values, { url: false });
+    if (values.view === "lifespans") toggleRepoViewMode("lifespans");
   }
 
   function noteRate(res) {
@@ -1655,6 +2027,8 @@
 
   function clearStoredToken() {
     state.token = "";
+    // Tokens are never persisted. Legacy builds wrote this key; remove it so
+    // an upgrade cannot leave an old credential behind in the tab.
     try { sessionStorage.removeItem(TOKEN_STORAGE_KEY); } catch (e) {}
   }
 
@@ -1715,16 +2089,28 @@
   function showAuthGate(probe, message) {
     var gate = document.getElementById("auth-gate");
     if (!gate) return;
+    if (typeof closeAllModals === "function") closeAllModals();
     state.authProbe = probe || state.authProbe;
     gate.classList.remove("hidden");
     document.body.style.overflow = "hidden";
     // A previous authorize attempt may have left these disabled.
     setAuthGateBusy(false);
 
-    var canOauth = !!(probe && probe.oauthConfigured);
+    var canOauth = !!(probe && (probe.oauthConfigured || probe.authorized));
     var online = !!probe;
 
     setText("auth-bridge-status", canOauth ? "SECURE OAUTH READY" : (online ? "OAUTH SETUP REQUIRED" : "SECURE CONNECTION OFFLINE"));
+
+    var permissionsEl = document.getElementById("auth-permissions");
+    if (permissionsEl) {
+      var permissions = (probe && probe.permissions) || [];
+      permissionsEl.innerHTML = canOauth
+        ? permissions.map(function (p) {
+            return '<li class="flex gap-2"><span class="text-secondary shrink-0">·</span><span><code class="text-on-surface">' +
+              escapeHtml(p.scope) + '</code> — ' + escapeHtml(p.description) + '</span></li>';
+          }).join("") || "<li>No permissions were reported by the server.</li>"
+        : "<li>Permissions are unavailable until the server is configured.</li>";
+    }
 
     var primary = document.getElementById("btn-authorize-github");
     if (primary) {
@@ -1753,10 +2139,23 @@
       try { usernameInput.value = sessionStorage.getItem(REQUESTED_USER_KEY) || ""; } catch (e) {}
     }
 
+    var localBtn = document.getElementById("btn-local-auth");
+    if (localBtn) {
+      var canLocal = !!(probe && probe.localAvailable);
+      localBtn.classList.toggle("hidden", !canLocal);
+      localBtn.disabled = !canLocal;
+      if (canLocal && probe.localLogin) {
+        localBtn.textContent = "Use the GitHub CLI session for @" + probe.localLogin;
+      }
+    }
+
     var status = document.getElementById("auth-gate-status");
     if (status) {
       status.textContent = message || "ENTER YOUR USERNAME TO CONTINUE";
       status.className = "font-label-mono text-[10px] mt-3 " + (message ? "text-secondary" : "text-on-surface-variant");
+    }
+    if (usernameInput && !usernameInput.value) {
+      setTimeout(function () { try { usernameInput.focus(); } catch (e) {} }, 30);
     }
   }
 
@@ -1764,6 +2163,17 @@
     var gate = document.getElementById("auth-gate");
     if (gate) gate.classList.add("hidden");
     document.body.style.overflow = "";
+  }
+
+  function expireServerSession(message) {
+    state.auth = null;
+    state.authProbe = state.authProbe || null;
+    state.mode = "public";
+    state.sessionInfo = null;
+    state.accountStatus = null;
+    state.csrfToken = "";
+    disconnectEvents();
+    showAuthGate(state.authProbe, message || "GITHUB AUTHORIZATION EXPIRED · AUTHORIZE AGAIN TO CONTINUE");
   }
 
   async function verifyTokenSession(token, opts) {
@@ -1801,6 +2211,11 @@
       profile: user,
       scopes: res.headers.get("x-oauth-scopes") || ""
     };
+    state.sessionInfo = null;
+    state.accountStatus = null;
+    state.csrfToken = "";
+    disconnectEvents();
+    await loadPreferences();
     return true;
   }
 
@@ -1814,15 +2229,24 @@
       state.auth = probe;
       state.mode = "server";
       state.username = probe.login;
+      state.sessionInfo = probe;
+      state.csrfToken = probe.csrfToken || state.csrfToken;
       clearStoredToken();
       hideAuthGate();
+      await loadPreferences();
+      connectEvents();
       await reloadAccount(probe.login, false);
+      loadAccountStatus();
       return;
     }
 
     state.mode = "public";
     state.auth = null;
     state.token = "";
+    state.sessionInfo = null;
+    state.csrfToken = "";
+    disconnectEvents();
+    await loadPreferences();
     showAuthGate(probe, authErr ? authErrorMessage(authErr) : "");
   }
 
@@ -1866,9 +2290,14 @@
       state.auth = data;
       state.mode = "server";
       state.username = data.login;
+      state.sessionInfo = data;
+      state.csrfToken = data.csrfToken || state.csrfToken;
       try { sessionStorage.removeItem(PUBLIC_ONLY_KEY); } catch (e) {}
       hideAuthGate();
+      await loadPreferences();
+      connectEvents();
       await reloadAccount(data.login, true);
+      loadAccountStatus();
     } catch (e) {
       setAuthGateBusy(false, "AUTHORIZATION FAILED · " + String(e.message || e).toUpperCase());
       showToast("LOCAL AUTHORIZATION FAILED");
@@ -1886,10 +2315,7 @@
     setAuthGateBusy(true, "VERIFYING TOKEN WITH GITHUB…");
     try {
       await verifyTokenSession(token);
-      try {
-        sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
-        sessionStorage.removeItem(PUBLIC_ONLY_KEY);
-      } catch (e) {}
+      try { sessionStorage.removeItem(PUBLIC_ONLY_KEY); } catch (e) {}
       hideAuthGate();
       if (input) input.value = "";
       await reloadAccount(state.auth.login, true);
@@ -1928,10 +2354,7 @@
     setText("github-fetch-status", "VERIFYING TOKEN WITH GITHUB…");
     try {
       await verifyTokenSession(token);
-      try {
-        sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
-        sessionStorage.removeItem(PUBLIC_ONLY_KEY);
-      } catch (e) {}
+      try { sessionStorage.removeItem(PUBLIC_ONLY_KEY); } catch (e) {}
       if (input) input.value = "";
       closeAllModals();
       hideAuthGate();
@@ -1956,31 +2379,337 @@
   async function signOut() {
     if (state.mode === "server" || (state.auth && state.auth.mode !== "token")) {
       try {
-        await fetch(AUTH_API + "/logout", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "X-Logbook-Auth": "1", "Accept": "application/json" }
-        });
+        await apiFetch("/logout", { method: "POST" });
       } catch (e) {
         window.location.href = "/auth/logout";
         return;
       }
     }
+    forgetLocalAccount();
+    closeAllModals();
+    window.location.reload();
+  }
+
+  // -----------------------------------------------------------------------
+  // Session management, data controls, glossary and saved views
+  // -----------------------------------------------------------------------
+  function formatSessionTime(ms) {
+    if (!ms) return "—";
+    try { return new Date(ms).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }); }
+    catch (e) { return new Date(ms).toLocaleString(); }
+  }
+
+  function hasServerSession() {
+    return usingServerAuth() && !!state.sessionInfo;
+  }
+
+  function renderSessionSummary() {
+    var el = document.getElementById("session-summary");
+    if (!el) return;
+    if (!hasServerSession()) {
+      el.innerHTML = state.mode === "token"
+        ? "Access-token mode is active in this tab only. Tokens are not stored or written to disk. Use the OAuth gate for server-side encrypted sessions."
+        : "No server session is active. Public telemetry is read anonymously; authorize GitHub to include private repositories.";
+      return;
+    }
+    var info = state.sessionInfo || {};
+    var status = state.accountStatus || {};
+    var session = status.session || {};
+    var snapshot = status.snapshot;
+    var active = session.active || 1;
+    var mode = info.mode === "local" ? "GITHUB CLI" : "GITHUB OAUTH";
+    var rows = [
+      ["MODE", mode + " · " + String(info.scopes || "no scopes reported")],
+      ["SESSION", String(info.sessionId || "—").slice(0, 14) + "…"],
+      ["ACTIVE SESSIONS", String(active)],
+      ["EXPIRES", formatSessionTime(info.expiresAt)],
+      ["SNAPSHOT", snapshot ? formatSessionTime(snapshot.updatedAt) : "not built yet"]
+    ];
+    el.innerHTML = '<div class="grid sm:grid-cols-2 gap-x-5 gap-y-1">' + rows.map(function (row) {
+      return '<div><span class="text-on-surface-variant uppercase">' + escapeHtml(row[0]) + '</span> · <span class="text-on-surface">' + escapeHtml(row[1]) + '</span></div>';
+    }).join("") + '</div>';
+  }
+
+  async function loadAccountStatus() {
+    if (!usingServerAuth()) {
+      state.accountStatus = null;
+      renderSessionSummary();
+      return;
+    }
+    try {
+      state.accountStatus = await apiJson("/status");
+    } catch (e) {
+      state.accountStatus = null;
+    }
+    renderSessionSummary();
+  }
+
+  function sessionDeviceLabel(ua) {
+    var text = String(ua || "");
+    if (!text) return "Unknown device";
+    if (/Edg\//.test(text)) return "Microsoft Edge";
+    if (/Chrome\//.test(text) && !/Chromium/.test(text)) return "Chrome";
+    if (/Firefox\//.test(text)) return "Firefox";
+    if (/Safari\//.test(text)) return "Safari";
+    return text.slice(0, 36);
+  }
+
+  function renderSessionList(data) {
+    var list = document.getElementById("session-list");
+    if (!list) return;
+    var sessions = (data && data.sessions) || [];
+    if (!sessions.length) {
+      list.innerHTML = '<div class="p-3 font-mono-data text-[11px] text-on-surface-variant">No active sessions were found.</div>';
+      return;
+    }
+    list.innerHTML = sessions.map(function (s) {
+      var badge = s.current
+        ? '<span class="border border-secondary text-secondary px-1 py-0.5 uppercase text-[8px]">THIS SESSION</span>'
+        : '<button type="button" class="btn-revoke-session underline underline-offset-2 hover:text-secondary uppercase text-[9px]" data-session-id="' + escapeHtml(s.id) + '">Revoke</button>';
+      return '<div class="p-3 flex flex-wrap items-start justify-between gap-3">' +
+        '<div class="min-w-0">' +
+          '<div class="flex flex-wrap items-center gap-2 font-body-sm text-body-sm text-on-surface">' +
+            '<span>' + escapeHtml(sessionDeviceLabel(s.userAgent)) + '</span>' +
+            '<span class="font-label-mono text-[9px] text-on-surface-variant uppercase">' + escapeHtml(s.mode === "local" ? "CLI" : "OAUTH") + '</span>' +
+          '</div>' +
+          '<div class="font-mono-data text-[10px] text-on-surface-variant mt-1">' +
+            escapeHtml(s.ip || "unknown IP") + ' · last used ' + escapeHtml(formatSessionTime(s.lastUsed)) +
+            ' · started ' + escapeHtml(formatSessionTime(s.createdAt)) +
+            ' · expires ' + escapeHtml(formatSessionTime(s.expiresAt)) +
+          '</div>' +
+        '</div>' + '<div class="shrink-0">' + badge + '</div>' +
+      '</div>';
+    }).join("");
+    list.querySelectorAll(".btn-revoke-session").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        revokeSessionById(btn.getAttribute("data-session-id"));
+      });
+    });
+  }
+
+  async function openSessionsModal() {
+    openModal("session-modal");
+    var list = document.getElementById("session-list");
+    if (!hasServerSession()) {
+      if (list) list.innerHTML = '<div class="p-3 font-mono-data text-[11px] text-on-surface-variant">Authorize GitHub through the OAuth gate to create a server-side session. Public visits have no session to manage.</div>';
+      return;
+    }
+    if (list) list.innerHTML = '<div class="p-3 font-mono-data text-[11px] text-on-surface-variant">Loading sessions…</div>';
+    try {
+      renderSessionList(await apiJson("/sessions"));
+    } catch (e) {
+      if (list) list.innerHTML = '<div class="p-3 font-mono-data text-[11px] text-secondary">Could not load sessions: ' + escapeHtml(e.message || e) + '</div>';
+    }
+  }
+
+  async function revokeSessionById(id) {
+    if (!id) return;
+    if (!window.confirm("Revoke this session? That device will need to authorize again.")) return;
+    try {
+      var data = await apiJson("/sessions/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: id })
+      });
+      if (data && data.signedOut) {
+        forgetLocalAccount();
+        showToast("SESSION REVOKED · SIGNING OUT");
+        setTimeout(function () { window.location.reload(); }, 500);
+        return;
+      }
+      showToast("SESSION REVOKED");
+      openSessionsModal();
+      loadAccountStatus();
+    } catch (e) {
+      showToast("COULD NOT REVOKE SESSION");
+    }
+  }
+
+  async function revokeOtherSessions() {
+    if (!hasServerSession()) return;
+    if (!window.confirm("Sign out every other session for this account?")) return;
+    try {
+      var data = await apiJson("/sessions/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      showToast("SIGNED OUT " + ((data && data.revoked) || 0) + " OTHER SESSION(S)");
+      openSessionsModal();
+      loadAccountStatus();
+    } catch (e) {
+      showToast("COULD NOT REVOKE OTHER SESSIONS");
+    }
+  }
+
+  async function signOutEverywhere() {
+    if (!hasServerSession()) return;
+    if (!window.confirm("Sign out every Logbook session for this account, including this one?")) return;
+    try {
+      await apiJson("/sessions/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ all: true })
+      });
+      forgetLocalAccount();
+      showToast("SIGNED OUT EVERYWHERE");
+      setTimeout(function () { window.location.reload(); }, 500);
+    } catch (e) {
+      showToast("COULD NOT SIGN OUT EVERYWHERE");
+    }
+  }
+
+  function forgetLocalAccount() {
     clearStoredToken();
+    disconnectEvents();
     try {
       sessionStorage.removeItem(PUBLIC_ONLY_KEY);
       sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+      sessionStorage.removeItem(REQUESTED_USER_KEY);
     } catch (e) {}
     try {
       localStorage.removeItem(CACHE_KEY);
       localStorage.removeItem("logbook:github:payload:v1");
     } catch (e) {}
     state.auth = null;
-    state.token = "";
-    state.mode = "public";
+    state.authProbe = null;
+    state.sessionInfo = null;
+    state.accountStatus = null;
+    state.csrfToken = "";
     state.payload = null;
-    closeAllModals();
-    window.location.reload();
+    state.mode = "public";
+  }
+
+  async function deleteAccountData() {
+    if (!hasServerSession()) {
+      showToast("AUTHORIZE GITHUB TO MANAGE SERVER DATA");
+      return;
+    }
+    var phrase = window.prompt("This permanently deletes every encrypted snapshot, sync job, session, preference, and audit row Logbook holds for this account.\n\nType DELETE to continue.");
+    if (phrase !== "DELETE") return;
+    if (!window.confirm("Delete all Logbook data for @" + state.username + " now? This cannot be undone.")) return;
+    try {
+      var data = await apiJson("/account", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "DELETE" })
+      });
+      forgetLocalAccount();
+      closeAllModals();
+      showToast("DELETED " + ((data && data.deleted && data.deleted.snapshots) || 0) + " SNAPSHOTS · SIGNING OUT");
+      setTimeout(function () { window.location.reload(); }, 800);
+    } catch (e) {
+      showToast("DELETE FAILED");
+      setStatusBanner("error", "Could not delete account data: " + String(e.message || e));
+    }
+  }
+
+  function exportAccountData() {
+    if (!hasServerSession()) {
+      showToast("AUTHORIZE GITHUB TO EXPORT SERVER DATA");
+      return;
+    }
+    var a = document.createElement("a");
+    a.href = AUTH_API + "/export";
+    a.download = "logbook-" + state.username + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast("EXPORT STARTED · ENCRYPTED SNAPSHOT DECRYPTED FOR DOWNLOAD");
+  }
+
+  function renderGlossary() {
+    var el = document.getElementById("glossary-content");
+    if (!el) return;
+    var p = state.payload || {};
+    var limits = p.limits || {};
+    var deep = limits.deepRepositories || {};
+    var attr = p.attribution || {};
+    var source = p.contributionSource === "github-graphql" ? "GitHub contribution calendar (GraphQL)" : "Local commit scan (GraphQL unavailable)";
+    var trunc = Array.isArray(limits.commitScanTruncated) ? limits.commitScanTruncated : [];
+    var scopeLines = [];
+    scopeLines.push("<strong class=\"text-on-surface\">Contribution calendar:</strong> " + escapeHtml(source) + ". GitHub's calendar can include pull requests, issues, and code review contributions; the local scan counts commits only.");
+    scopeLines.push("<strong class=\"text-on-surface\">Attribution:</strong> commits are counted when the GitHub login or a verified email matches @" + escapeHtml(attr.author || state.username) + ". Bots are " + escapeHtml(attr.bots || "excluded") + " and merge commits are " + escapeHtml(attr.mergeCommits || "excluded") + ".");
+    if (deep.cap) scopeLines.push("<strong class=\"text-on-surface\">Repository coverage:</strong> " + Number(deep.included || 0) + " of " + Number(deep.discovered || 0) + " eligible repositories indexed (cap " + deep.cap + ").");
+    if (limits.commitsPerRepository) scopeLines.push("<strong class=\"text-on-surface\">Commit depth:</strong> up to " + limits.commitsPerRepository + " commits per repository per scan.");
+    if (trunc.length) scopeLines.push("<strong class=\"text-on-surface\">Truncated histories:</strong> " + escapeHtml(trunc.slice(0, 6).join(", ")) + (trunc.length > 6 ? " and " + (trunc.length - 6) + " more." : "."));
+    if (p.partial) scopeLines.push("<strong class=\"text-secondary\">Partial scan:</strong> " + Number(p.failedRepos || 0) + " repositories could not be read. Totals are a floor, not a complete history.");
+    if (p.scope && p.scope.defaultBranchOnly) scopeLines.push("<strong class=\"text-on-surface\">Branches:</strong> default branches only. Work on unmerged branches is not counted.");
+    scopeLines.push("<strong class=\"text-on-surface\">Privacy:</strong> private snapshots are encrypted at rest and scoped to your session. Logbook never writes private payloads or GitHub tokens to browser storage.");
+
+    el.innerHTML =
+      '<div class="grid sm:grid-cols-2 gap-3">' +
+        '<div class="border border-outline-variant/50 p-3"><div class="font-label-mono text-[10px] uppercase tracking-widest text-on-surface mb-1">Commits</div><p>Default-branch commits authored by the verified account. Merge commits and bot authors are excluded by default.</p></div>' +
+        '<div class="border border-outline-variant/50 p-3"><div class="font-label-mono text-[10px] uppercase tracking-widest text-on-surface mb-1">Active days &amp; streaks</div><p>An active day has at least one attributed contribution. A streak is a run of consecutive calendar days. Current streak ends today or yesterday.</p></div>' +
+        '<div class="border border-outline-variant/50 p-3"><div class="font-label-mono text-[10px] uppercase tracking-widest text-on-surface mb-1">Code volume</div><p>Language bytes come from GitHub language totals for indexed repositories. These are repository size estimates, not lines typed by the account.</p></div>' +
+        '<div class="border border-outline-variant/50 p-3"><div class="font-label-mono text-[10px] uppercase tracking-widest text-on-surface mb-1">Reviews &amp; issues</div><p>Counts come from GitHub search totals for authored pull requests, authored issues, and reviews by this account. Zero can mean the search scope was unavailable.</p></div>' +
+      '</div>' +
+      '<div class="border border-outline-variant/50 bg-surface-container-low p-3"><div class="font-label-mono text-[10px] uppercase tracking-widest text-on-surface mb-1">Data scope for this snapshot</div><ul class="space-y-1.5 list-disc pl-4">' +
+        scopeLines.map(function (line) { return "<li>" + line + "</li>"; }).join("") +
+      '</ul></div>' +
+      '<p class="font-label-mono text-[9px] uppercase tracking-wider">Metrics describe recorded activity. They are not a measure of developer quality or productivity.</p>';
+  }
+
+  function saveCurrentView() {
+    var name = window.prompt("Name this saved view", "My view");
+    name = String(name || "").trim().slice(0, 40);
+    if (!name) return;
+    var view = { name: name, filters: currentFilterState() };
+    state.savedViews = state.savedViews.filter(function (v) { return v.name !== name; });
+    state.savedViews.push(view);
+    state.savedViews = state.savedViews.slice(-30);
+    state.preferences.activeView = name;
+    persistPreferences();
+    renderSavedViews();
+    showToast("SAVED VIEW · " + name.toUpperCase());
+  }
+
+  function applySavedView(name) {
+    var view = state.savedViews.find(function (v) { return v.name === name; });
+    if (!view) return;
+    state.preferences.activeView = name;
+    applyFilterState(view.filters || {});
+    persistPreferences();
+    showToast("APPLIED VIEW · " + name.toUpperCase());
+  }
+
+  function deleteActiveView() {
+    var select = document.getElementById("saved-view-select");
+    var name = select ? select.value : "";
+    if (!name) {
+      showToast("SELECT A SAVED VIEW FIRST");
+      return;
+    }
+    state.savedViews = state.savedViews.filter(function (v) { return v.name !== name; });
+    if (state.preferences.activeView === name) state.preferences.activeView = "";
+    persistPreferences();
+    renderSavedViews();
+    showToast("DELETED VIEW · " + name.toUpperCase());
+  }
+
+  function copyFilterLink() {
+    syncUrlState();
+    copyTextToClipboard(window.location.href, "FILTER LINK");
+  }
+
+  function resetFilters() {
+    var search = document.getElementById("repo-search-input");
+    if (search) search.value = "";
+    setSelectValue("filter-lang", "ALL");
+    setSelectValue("filter-type", "ALL");
+    setSelectValue("filter-vis", "ALL");
+    setSelectValue("filter-sort", "pushed");
+    state.globalRepoFilter = null;
+    state.visibleRepoLimit = Math.max(10, Math.min(100, state.visibleRepoLimit));
+    state.currentRange = "90D";
+    state.preferences.activeView = "";
+    toggleRepoViewMode("ledger");
+    renderRangeData("90D");
+    renderRepositories();
+    updateGlobalFilterBanner();
+    persistPreferences();
+    try { history.replaceState(history.state || {}, "", window.location.pathname + (window.location.hash || "")); } catch (e) {}
+    showToast("FILTERS RESET");
   }
 
   function renderAccountDossier() {
@@ -2044,6 +2773,7 @@
         try { sessionStorage.removeItem(PUBLIC_ONLY_KEY); } catch (e) {}
         reloadAccount(state.auth.login, true);
       });
+      renderSessionSummary();
       return;
     }
 
@@ -2111,7 +2841,7 @@
 
     var tokenNote = state.mode === "server"
       ? "TOKEN HELD BY THE AUTHORIZATION BRIDGE · NEVER SENT TO THIS PAGE"
-      : "TOKEN HELD IN SESSIONSTORAGE FOR THIS TAB · CLEARED ON SIGN OUT";
+      : "TOKEN HELD IN MEMORY FOR THIS TAB · CLEARED ON RELOAD OR SIGN OUT";
 
     box.innerHTML =
       '<div class="border border-outline-variant/60 bg-surface-container-low p-3.5">' +
@@ -2150,6 +2880,7 @@
         '</div>' +
         '<div class="font-label-mono text-[8px] uppercase tracking-widest text-on-surface-variant mt-3 pt-2 border-t border-outline-variant/30">' + escapeHtml(tokenNote) + '</div>' +
       '</div>';
+    renderSessionSummary();
   }
 
   async function mapLimit(items, limit, fn) {
@@ -2336,12 +3067,19 @@
     return 4;
   }
 
-  function buildHeatmap(commits, year) {
+  function buildHeatmap(commits, year, officialDays) {
     var counts = {};
-    commits.forEach(function (c) {
-      var k = c.iso.slice(0, 10);
-      counts[k] = (counts[k] || 0) + 1;
-    });
+    var hasOfficial = officialDays && Object.keys(officialDays).length > 0;
+    if (hasOfficial) {
+      Object.keys(officialDays).forEach(function (key) {
+        if (key.slice(0, 4) === String(year)) counts[key] = Number(officialDays[key]) || 0;
+      });
+    } else {
+      commits.forEach(function (c) {
+        var k = c.iso.slice(0, 10);
+        counts[k] = (counts[k] || 0) + 1;
+      });
+    }
 
     var jan1 = new Date(parseInt(year, 10), 0, 1);
     var start = new Date(jan1);
@@ -2766,6 +3504,7 @@
 
   function buildSummary(payload, heatmap) {
     var commits = payload.commits;
+    var totalCommits = Number(payload.commitTotal || commits.length) || 0;
     var totalBytes = Object.keys(payload.langTotals).reduce(function (s, k) { return s + payload.langTotals[k]; }, 0);
 
     var dayCounts = {};
@@ -2778,7 +3517,7 @@
     for (var i = 1; i < 24; i++) if (hourCounts[i] > hourCounts[peakHour]) peakHour = i;
 
     return {
-      commits: commits.length,
+      commits: totalCommits,
       prs: payload.prs,
       issues: payload.issues,
       reviews: payload.reviews,
@@ -2800,8 +3539,10 @@
     PROFILE = payload.profile;
     var thisYear = String(new Date().getFullYear());
     HEATMAP_YEARS = {};
+    var calendarYears = (payload.contributionCalendar && payload.contributionCalendar.years) || {};
     [thisYear, String(new Date().getFullYear() - 1), String(new Date().getFullYear() - 2)].forEach(function (y) {
-      HEATMAP_YEARS[y] = buildHeatmap(payload.commits, y);
+      var official = calendarYears[y] && calendarYears[y].days ? calendarYears[y].days : null;
+      HEATMAP_YEARS[y] = buildHeatmap(payload.commits, y, official);
     });
     if (!HEATMAP_YEARS[state.currentYear]) state.currentYear = thisYear;
 
@@ -2861,7 +3602,10 @@
           : "Token session — private repositories included";
       }
     }
-    setText("sync-label", "Synced " + relTime(new Date(PROFILE ? Date.now() : Date.now())));
+    var fetchedAt = state.payload && state.payload.fetchedAt;
+    setText("sync-label", state.payload && state.payload.loading
+      ? (fetchedAt ? "Refreshing · " + relTime(new Date(fetchedAt)) : "Refreshing…")
+      : "Synced " + relTime(new Date(fetchedAt || Date.now())));
   }
 
   function renderHeroCommit(idx) {
@@ -3172,6 +3916,12 @@
     }
   }
 
+  function contributionSourceLabel() {
+    return state.payload && state.payload.contributionSource === "github-graphql"
+      ? "official GitHub calendar"
+      : "local commit scan";
+  }
+
   function renderHeatmap(yearKey) {
     var y = HEATMAP_YEARS[yearKey];
     if (!y) return;
@@ -3189,6 +3939,7 @@
     setText("hm-stat-active", y.activeDays);
     setText("hm-stat-avg", y.avgCommits);
     setText("hm-stat-weekday", y.weekday);
+    setText("hm-source", contributionSourceLabel());
     setText("heatmap-peak-text", y.peakText);
     setText("heatmap-streak-text", y.streakText);
 
@@ -3207,8 +3958,10 @@
         var op = "";
         if (state.densityFilter !== null && state.densityFilter !== lvl) op = "opacity-20";
 
-        html += '<div class="hm-cell w-[18px] h-[18px] ' + LEVEL_BG[lvl] + ' ' + ring + ' ' + op + ' cursor-pointer" ' +
-          'data-date="' + ymdCell(yearKey, cIdx, rIdx) + '" data-commits="' + count + '"></div>';
+        var cellLabel = ymdCell(yearKey, cIdx, rIdx) + " — " + count + (count === 1 ? " contribution" : " contributions") + " · " + contributionSourceLabel();
+        html += '<button type="button" class="hm-cell w-[18px] h-[18px] p-0 border-0 ' + LEVEL_BG[lvl] + ' ' + ring + ' ' + op + ' cursor-pointer" ' +
+          'aria-label="' + escapeHtml(cellLabel) + '" title="' + escapeHtml(cellLabel) + '" ' +
+          'data-date="' + ymdCell(yearKey, cIdx, rIdx) + '" data-commits="' + count + '"></button>';
       });
       html += '</div>';
     });
@@ -3225,8 +3978,8 @@
       cell.addEventListener("mouseenter", function () {
         var cnt = parseInt(cell.getAttribute("data-commits"), 10);
         var dt = cell.getAttribute("data-date");
-        setText("hm-tip-title", dt + " · " + cnt + (cnt === 1 ? " commit" : " commits"));
-        setText("hm-tip-sub", cnt > 0 ? "Click to filter push log" : "No commits recorded on this date");
+        setText("hm-tip-title", dt + " · " + cnt + (cnt === 1 ? " contribution" : " contributions"));
+        setText("hm-tip-sub", (cnt > 0 ? "Click to inspect this day" : "No contributions recorded on this date") + " · " + contributionSourceLabel());
         if (tip) tip.style.display = "block";
       });
       cell.addEventListener("mouseleave", function () { if (tip) tip.style.display = "none"; });
@@ -3270,11 +4023,11 @@
       row.hours.forEach(function (val, hIdx) {
         var hStr = pad2(hIdx) + ":00";
         if (val === 0) {
-          html += '<button type="button" class="group-punch flex justify-center items-center h-5 focus:outline-none" data-day="' + row.day + '" data-hour="' + hStr + '" data-val="0"><span class="punch-dot w-0.5 h-0.5 rounded-full bg-outline-variant/40"></span></button>';
+          html += '<button type="button" aria-label="' + row.day + " " + hStr + ', no commits" class="group-punch flex justify-center items-center h-5 focus:outline-none" data-day="' + row.day + '" data-hour="' + hStr + '" data-val="0"><span class="punch-dot w-0.5 h-0.5 rounded-full bg-outline-variant/40"></span></button>';
         } else {
           var ratio = val / max;
           var size = ratio > 0.85 ? "w-4 h-4" : ratio > 0.7 ? "w-3.5 h-3.5" : ratio > 0.55 ? "w-3 h-3" : ratio > 0.4 ? "w-2.5 h-2.5" : ratio > 0.25 ? "w-2 h-2" : ratio > 0.12 ? "w-1.5 h-1.5" : "w-1 h-1";
-          html += '<button type="button" class="group-punch flex justify-center items-center h-5 focus:outline-none" data-day="' + row.day + '" data-hour="' + hStr + '" data-val="' + val + '" title="' + row.day + " " + hStr + " · " + val + ' commits">' +
+          html += '<button type="button" aria-label="' + row.day + " " + hStr + ", " + val + ' commits" class="group-punch flex justify-center items-center h-5 focus:outline-none" data-day="' + row.day + '" data-hour="' + hStr + '" data-val="' + val + '" title="' + row.day + " " + hStr + " · " + val + ' commits">' +
             '<span class="punch-dot rounded-full bg-primary ' + size + '"></span></button>';
         }
       });
@@ -3483,6 +4236,9 @@
   function populateSelectors() {
     var langSel = document.getElementById("filter-lang");
     if (langSel) {
+      // A refreshed snapshot repopulates the options. Keep the active filter
+      // instead of silently resetting it to "ALL" after boot/URL state applied.
+      var activeLang = langSel.value;
       var langs = {};
       REPOSITORIES.forEach(function (r) { if (r.lang && r.lang !== "—") langs[r.lang] = (langs[r.lang] || 0) + 1; });
       var opts = '<option value="ALL">All (' + REPOSITORIES.length + ')</option>';
@@ -3490,10 +4246,12 @@
         opts += '<option value="' + escapeHtml(l) + '">' + escapeHtml(l) + ' (' + langs[l] + ')</option>';
       });
       langSel.innerHTML = opts;
+      if (Array.prototype.some.call(langSel.options, function (o) { return o.value === activeLang; })) langSel.value = activeLang;
     }
 
     var pushSel = document.getElementById("push-repo-select");
     if (pushSel) {
+      var activePushRepo = pushSel.value;
       var names = {};
       (state.payload ? state.payload.commits : []).forEach(function (c) {
         var key = c.repoFullName || c.repo;
@@ -3504,6 +4262,7 @@
         po += '<option value="' + escapeHtml(n) + '">' + escapeHtml(names[n]) + '</option>';
       });
       pushSel.innerHTML = po;
+      if (Array.prototype.some.call(pushSel.options, function (o) { return o.value === activePushRepo; })) pushSel.value = activePushRepo;
     }
 
     var yearsEl = document.querySelector("#section-rhythm .year-btn");
@@ -3822,6 +4581,10 @@
     renderFocusBars(RANGE_DATA[state.currentRange].focus);
     renderRepositories();
     renderPushLog();
+    updateGlobalFilterBanner();
+    state.preferences.activeView = "";
+    renderSavedViews();
+    syncUrlState();
   }
 
   // =========================================================================
@@ -3832,16 +4595,38 @@
     if (el) el.scrollIntoView({ behavior: "smooth" });
   }
 
+  var MODAL_IDS = ["cmd-palette-modal", "profile-modal", "shortcuts-modal", "session-modal", "glossary-modal"];
+
+  function visibleModal() {
+    for (var i = MODAL_IDS.length - 1; i >= 0; i--) {
+      var el = document.getElementById(MODAL_IDS[i]);
+      if (el && !el.classList.contains("hidden")) return el;
+    }
+    return null;
+  }
+
+  function modalFocusables(modal) {
+    return Array.prototype.filter.call(
+      modal.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+      function (el) { return el.offsetParent !== null; }
+    );
+  }
+
   function openModal(id) {
     playSound("relay");
     var el = document.getElementById(id);
     if (!el) return;
+    if (el.classList.contains("hidden")) state.lastFocus = document.activeElement;
     el.classList.remove("hidden");
     el.setAttribute("aria-hidden", "false");
     if (id === "cmd-palette-modal") {
       document.getElementById("cmd-input").value = "";
       renderCommandResults("");
       setTimeout(function () { document.getElementById("cmd-input").focus(); }, 20);
+    } else {
+      var targets = modalFocusables(el);
+      var preferred = el.querySelector("[autofocus]") || targets[0];
+      if (preferred) setTimeout(function () { preferred.focus(); }, 20);
     }
     if (id === "profile-modal") {
       renderAccountDossier();
@@ -3853,10 +4638,110 @@
   }
 
   function closeAllModals() {
-    ["cmd-palette-modal", "profile-modal", "shortcuts-modal"].forEach(function (id) {
+    MODAL_IDS.forEach(function (id) {
       var m = document.getElementById(id);
       if (m) { m.classList.add("hidden"); m.setAttribute("aria-hidden", "true"); }
     });
+    if (state.lastFocus && document.contains(state.lastFocus)) {
+      try { state.lastFocus.focus(); } catch (e) {}
+    }
+    state.lastFocus = null;
+  }
+
+  function trapModalFocus(event) {
+    var modal = visibleModal();
+    if (!modal) return false;
+    var focusables = modalFocusables(modal);
+    if (!focusables.length) return false;
+    var first = focusables[0];
+    var last = focusables[focusables.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+      return true;
+    }
+    if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+      event.preventDefault();
+      first.focus();
+      return true;
+    }
+    return false;
+  }
+
+  function toggleKioskMode() {
+    state.kioskActive = !state.kioskActive;
+    if (state.kioskActive) {
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(function(){});
+      }
+      showToast("KIOSK PRESENTATION MODE ACTIVE — AUTO-ROTATING SECTIONS");
+      var sections = ["section-now", "section-pulse", "section-rhythm", "section-repositories", "section-languages", "section-push-log"];
+      var idx = 0;
+      scrollToSec(sections[0]);
+      window._kioskTimer = setInterval(function () {
+        if (!state.kioskActive) {
+          clearInterval(window._kioskTimer);
+          return;
+        }
+        idx = (idx + 1) % sections.length;
+        scrollToSec(sections[idx]);
+      }, 12000);
+
+      // Create kiosk floating HUD if not exists
+      var hud = document.getElementById("kiosk-hud");
+      if (!hud) {
+        hud = document.createElement("div");
+        hud.id = "kiosk-hud";
+        hud.className = "fixed bottom-6 right-6 z-[300] bg-primary text-surface px-4 py-3 flex items-center gap-4 font-label-mono text-label-mono shadow-2xl border border-secondary";
+        hud.innerHTML = '<span class="flex items-center gap-2"><span class="w-2 h-2 bg-secondary live-dot"></span><span>KIOSK MODE (AUTO-ROTATING)</span></span>' +
+          '<button type="button" id="btn-exit-kiosk" class="border border-surface/50 px-2 py-1 hover:bg-secondary hover:text-surface transition-colors">EXIT [ESC]</button>';
+        document.body.appendChild(hud);
+        document.getElementById("btn-exit-kiosk").addEventListener("click", function () {
+          toggleKioskMode();
+        });
+      } else {
+        hud.classList.remove("hidden");
+      }
+    } else {
+      if (document.exitFullscreen && document.fullscreenElement) {
+        document.exitFullscreen().catch(function(){});
+      }
+      if (window._kioskTimer) clearInterval(window._kioskTimer);
+      var hud = document.getElementById("kiosk-hud");
+      if (hud) hud.classList.add("hidden");
+      showToast("KIOSK MODE EXITED");
+    }
+  }
+
+  function togglePortfolioMode() {
+    state.portfolioActive = !state.portfolioActive;
+    if (state.portfolioActive) {
+      showToast("PORTFOLIO MODE ACTIVE — CURATED PUBLIC ARCHIVE");
+      var banner = document.getElementById("portfolio-banner");
+      if (!banner) {
+        banner = document.createElement("div");
+        banner.id = "portfolio-banner";
+        banner.className = "w-full bg-secondary text-surface py-2 px-margin md:px-margin-desktop font-label-mono text-[10px] uppercase tracking-widest flex items-center justify-between z-45 sticky top-14";
+        banner.innerHTML = '<span>★ PORTFOLIO CASE STUDY VIEW · CURATED PUBLIC REPOSITORIES & TELEMETRY</span>' +
+          '<button type="button" id="btn-exit-portfolio" class="underline hover:text-surface-lowest">Exit Portfolio</button>';
+        var header = document.querySelector("header");
+        if (header && header.nextSibling) {
+          header.parentNode.insertBefore(banner, header.nextSibling);
+        }
+        document.getElementById("btn-exit-portfolio").addEventListener("click", function () {
+          togglePortfolioMode();
+        });
+      } else {
+        banner.classList.remove("hidden");
+      }
+      // Trigger re-render of repos
+      renderRepositories();
+    } else {
+      var banner = document.getElementById("portfolio-banner");
+      if (banner) banner.classList.add("hidden");
+      showToast("PORTFOLIO MODE EXITED");
+      renderRepositories();
+    }
   }
 
   function commandItems() {
@@ -3871,7 +4756,9 @@
       { label: "Switch GitHub account", category: "PROFILE", action: function () { openModal("profile-modal"); } },
       { label: "Toggle theme", category: "THEME", action: function () { document.getElementById("btn-theme-toggle").click(); } },
       { label: "Export repositories CSV", category: "EXPORT", action: function () { exportRepos("csv"); } },
-      { label: "Export repositories JSON", category: "EXPORT", action: function () { exportRepos("json"); } }
+      { label: "Export repositories JSON", category: "EXPORT", action: function () { exportRepos("json"); } },
+      { label: "Start Kiosk Presentation Mode (auto-rotating sections)", category: "PRESENTATION", action: function () { toggleKioskMode(); } },
+      { label: "Toggle Portfolio Mode (curated public archive view)", category: "PRESENTATION", action: function () { togglePortfolioMode(); } }
     ];
     REPOSITORIES.forEach(function (r) {
       items.push({
@@ -4006,8 +4893,7 @@
 
       if (res.status === 304) return "current";
       if (res.status === 401) {
-        state.auth = null;
-        showAuthGate(state.authProbe, "GITHUB AUTHORIZATION EXPIRED · AUTHORIZE AGAIN TO CONTINUE");
+        expireServerSession("GITHUB AUTHORIZATION EXPIRED · AUTHORIZE AGAIN TO CONTINUE");
         return "unauthorized";
       }
       if (res.status === 403 || res.status === 429) {
@@ -4058,19 +4944,41 @@
     } catch (e) { return null; }
   }
 
-  async function readServerSnapshot(maxAgeMs, full) {
+  async function readServerSnapshot(maxAgeMs) {
     if (!usingServerAuth()) return null;
     try {
       var headers = { "Accept": "application/json" };
-      var res = await fetch(AUTH_API + "/snapshot" + (full ? "" : "?commit_limit=250"), {
+      if (state.snapshotETag) headers["If-None-Match"] = state.snapshotETag;
+      var res = await fetch(AUTH_API + "/snapshot", {
         headers: headers,
         credentials: "same-origin",
         cache: "no-store"
       });
+      // 304 means the cached snapshot in this tab is still the newest one.
+      if (res.status === 304) return { __notModified: true };
       if (!res.ok) return null;
       var payload = await res.json();
       if (!payload || String(payload.username || "").toLowerCase() !== String(state.username || "").toLowerCase()) return null;
       if (maxAgeMs != null && (Date.now() - Number(payload.fetchedAt || 0)) > maxAgeMs) return null;
+
+      // The server may paginate very large ledgers. Follow the cursors so the
+      // builders always receive the complete commit set.
+      var guard = 0;
+      while (payload.pagination && payload.pagination.nextCursor != null && guard++ < 100) {
+        var pageRes = await fetch(
+          AUTH_API + "/snapshot?commit_limit=" + encodeURIComponent(payload.pagination.limit) +
+          "&cursor=" + encodeURIComponent(payload.pagination.nextCursor),
+          { headers: { "Accept": "application/json" }, credentials: "same-origin", cache: "no-store" }
+        );
+        if (!pageRes.ok) break;
+        var page = await pageRes.json();
+        if (!page || !Array.isArray(page.commits)) break;
+        payload.commits = payload.commits.concat(page.commits);
+        payload.pagination = page.pagination || null;
+      }
+      if (payload.pagination) delete payload.pagination;
+      payload.commitTotal = Number(payload.commitTotal || payload.commits.length) || 0;
+
       payload = revivePayload(payload);
       payload.__snapshotMeta = {
         etag: res.headers.get("etag") || "",
@@ -4083,29 +4991,124 @@
     }
   }
 
-  async function requestServerSync(force) {
-    var res = await fetch(AUTH_API + "/sync" + (force ? "?force=1" : ""), {
-      method: "POST",
-      headers: { "Accept": "application/json", "X-Logbook-Auth": "1" },
-      credentials: "same-origin"
-    });
+  async function requestServerSync(force, skipIfFresh) {
+    var query = force ? "?force=1" : (skipIfFresh ? "?skip_if_fresh=1" : "");
+    var res = await apiFetch("/sync" + query, { method: "POST" });
     if (res.status === 401) { var e = new Error("authorization expired"); e.code = "AUTH_REQUIRED"; throw e; }
     if (!res.ok) throw new Error("Could not queue account refresh");
     return res.json();
   }
 
+  function sseConnected() {
+    return !!state.eventSource && state.eventSource.readyState === 1;
+  }
+
+  function disconnectEvents() {
+    if (!state.eventSource) return;
+    try { state.eventSource.close(); } catch (e) {}
+    state.eventSource = null;
+    state.eventSourceFailures = 0;
+  }
+
+  function connectEvents() {
+    if (!usingServerAuth() || typeof EventSource === "undefined" || state.eventSource) return;
+    var source;
+    try {
+      source = new EventSource(AUTH_API + "/events", { withCredentials: true });
+    } catch (e) {
+      return;
+    }
+    state.eventSource = source;
+    state.eventSourceFailures = 0;
+    source.addEventListener("open", function () {
+      state.eventSourceFailures = 0;
+    });
+    source.addEventListener("sync", function (event) {
+      var job = null;
+      try { job = JSON.parse(event.data); } catch (e) { return; }
+      handleServerJob(job, { initial: !state.payload }).catch(function () {});
+    });
+    source.addEventListener("error", function () {
+      state.eventSourceFailures += 1;
+      // EventSource reconnects by itself for transient faults. After repeated
+      // failures (for example an expired session) stop retrying forever and
+      // fall back to the manual/periodic bridge checks.
+      if (state.eventSourceFailures >= 5) {
+        disconnectEvents();
+      }
+    });
+  }
+
+  async function handleServerJob(job, options) {
+    options = options || {};
+    if (!job || !usingServerAuth()) return;
+    var label = document.getElementById("sync-label");
+    if (label) {
+      if (job.state === "queued") label.textContent = "Queued…";
+      else if (job.state === "scanning") label.textContent = "Indexing " + (job.progress || 0) + "%";
+      else if (job.phase && job.phase !== "complete" && job.state !== "current" && job.state !== "partial" && job.state !== "failed" && job.state !== "cancelled" && job.state !== "idle") {
+        label.textContent = "Syncing " + job.phase + "…";
+      }
+    }
+
+    var snapshotAt = Number(job.snapshotAt || 0);
+    var needsSnapshot = snapshotAt > 0 &&
+      (!state.payload || snapshotAt > Number(state.snapshotAt || 0)) &&
+      !state.snapshotApplying;
+    if (needsSnapshot) {
+      state.snapshotApplying = true;
+      try {
+        var snapshot = await readServerSnapshot(null);
+        if (snapshot && !snapshot.__notModified) {
+          var firstPaint = options.initial || !state.payload;
+          applyServerSnapshot(snapshot, firstPaint);
+          var message = snapshotStatusMessage(snapshot);
+          if (message) setStatusBanner(message.kind, message.text);
+          loadAccountStatus();
+        }
+      } finally {
+        state.snapshotApplying = false;
+      }
+    }
+
+    if (job.state === "failed") {
+      setStatusBanner("warn", "Background refresh failed — the last known snapshot remains available.");
+      showToast("BACKGROUND REFRESH FAILED");
+    } else if (job.state === "partial") {
+      setStatusBanner("warn", "Refresh completed with partial repository data — totals are a floor.");
+    } else if (job.state === "current") {
+      var currentMessage = snapshotStatusMessage(state.payload);
+      setStatusBanner(currentMessage ? currentMessage.kind : null, currentMessage ? currentMessage.text : "");
+    } else if (job.state === "cancelled") {
+      setStatusBanner("info", "Background refresh cancelled.");
+    } else if (job.state === "idle" && snapshotAt > 0 && !state.payload) {
+      // Initial SSE replay can arrive before the first page request finishes.
+      var replay = await readServerSnapshot(null);
+      if (replay && !replay.__notModified) {
+        applyServerSnapshot(replay, true);
+        loadAccountStatus();
+      }
+    }
+
+    if (label && (job.state === "current" || job.state === "partial") && state.payload && state.payload.fetchedAt) {
+      label.textContent = "Synced " + relTime(new Date(state.payload.fetchedAt));
+    }
+  }
+
   function applyServerSnapshot(payload, initial) {
+    if (!payload || payload.__notModified) return false;
     var meta = payload.__snapshotMeta || {};
     delete payload.__snapshotMeta;
     var previous = state.snapshotSections;
     state.snapshotETag = meta.etag || state.snapshotETag;
+    state.snapshotAt = meta.at || state.snapshotAt;
     state.snapshotSections = meta.sections || state.snapshotSections;
     state.liveSyncSignature = liveRepoSignature(payload.repos);
     state.privateCount = payload.privateRepos || 0;
     hydrate(payload);
     if (initial || !previous || !meta.sections) {
       bootRender();
-      return;
+      return true;
     }
     var changed = function (name) { return previous[name] !== meta.sections[name]; };
     if (changed("profile")) renderHeader();
@@ -4117,33 +5120,44 @@
       renderPunchCard(); renderPushLog();
     }
     if (changed("repositories") || changed("commits")) renderRangeData(state.currentRange);
+    if (changed("profile") || changed("repositories") || changed("commits")) renderFooter();
+    return true;
+  }
+
+  function snapshotStatusMessage(payload) {
+    if (!payload) return null;
+    if (payload.syncError) return { kind: "warn", text: "Background refresh failed — the last known snapshot remains available." };
+    if (payload.loading) return { kind: "info", text: "Profile and repositories are ready · indexing commit history in the background…" };
+    if (payload.partial) {
+      var detail = payload.failedRepos ? " (" + payload.failedRepos + " repositories incomplete)" : "";
+      var truncated = payload.limits && Array.isArray(payload.limits.commitScanTruncated) && payload.limits.commitScanTruncated.length;
+      if (truncated) detail += " · " + truncated + " commit histories truncated at the scan cap";
+      return { kind: "warn", text: "Partial data" + detail + " — totals are a floor, not a complete history." };
+    }
+    var deep = payload.limits && payload.limits.deepRepositories;
+    if (deep && Number(deep.included || 0) < Number(deep.discovered || 0)) {
+      return {
+        kind: "info",
+        text: "Indexed " + deep.included + " of " + deep.discovered + " eligible repositories (scan cap " + deep.cap + "). Open Definitions for data scope."
+      };
+    }
+    return null;
   }
 
   async function pollServerSync(initialNeeded) {
     if (state.serverSyncPolling) return;
     state.serverSyncPolling = true;
-    var lastETag = state.snapshotETag;
+    var first = !!initialNeeded;
     try {
       for (var attempt = 0; attempt < 120 && usingServerAuth(); attempt++) {
-        await new Promise(function (resolve) { setTimeout(resolve, attempt < 10 ? 500 : 1500); });
+        await new Promise(function (resolve) { setTimeout(resolve, attempt < 8 ? 900 : 2500); });
+        if (sseConnected()) break; // live updates take over from here
         var statusRes = await fetch(AUTH_API + "/sync", { credentials: "same-origin", cache: "no-store" });
         if (!statusRes.ok) break;
         var job = await statusRes.json();
-        var snapshot = await readServerSnapshot(null, job.state === "current" || job.state === "partial");
-        if (snapshot && (initialNeeded || !lastETag || (snapshot.__snapshotMeta && snapshot.__snapshotMeta.etag !== lastETag))) {
-          applyServerSnapshot(snapshot, initialNeeded);
-          initialNeeded = false;
-          lastETag = state.snapshotETag;
-        }
-        var label = document.getElementById("sync-label");
-        if (label && job.state === "scanning") label.textContent = "Indexing " + job.progress + "%";
-        if (["current", "partial", "failed", "cancelled"].indexOf(job.state) !== -1) {
-          if (label && state.payload) label.textContent = "Synced " + relTime(new Date(state.payload.fetchedAt || Date.now()));
-          if (job.state === "failed") setStatusBanner("warn", "Background refresh failed — the last known snapshot remains available.");
-          else if (job.state === "partial") setStatusBanner("warn", "Refresh completed with partial repository data.");
-          else setStatusBanner(null);
-          break;
-        }
+        await handleServerJob(job, { initial: first });
+        first = false;
+        if (["current", "partial", "failed", "cancelled"].indexOf(job.state) !== -1) break;
       }
     } catch (e) {
       if (initialNeeded) setStatusBanner("error", "Could not build the first account snapshot: " + String(e.message || e));
@@ -4152,30 +5166,14 @@
     }
   }
 
-  async function startServerSync(force, initialNeeded) {
+  async function startServerSync(force, initialNeeded, skipIfFresh) {
     try {
-      await requestServerSync(force);
-      pollServerSync(!!initialNeeded);
+      await requestServerSync(force, skipIfFresh);
+      if (!sseConnected()) pollServerSync(!!initialNeeded);
     } catch (e) {
       if (e.code === "AUTH_REQUIRED") throw e;
       setStatusBanner("warn", "Showing the last known snapshot; background refresh could not start.");
     }
-  }
-
-  function saveServerSnapshot(payload) {
-    if (!usingServerAuth() || !payload) return;
-    setTimeout(function () {
-      fetch(AUTH_API + "/snapshot", {
-        method: "POST",
-        headers: {
-          "Accept": "application/json",
-          "Content-Type": "application/json",
-          "X-Logbook-Auth": "1"
-        },
-        credentials: "same-origin",
-        body: JSON.stringify(payload)
-      }).catch(function () {});
-    }, 0);
   }
 
   async function reloadAccount(username, force, options) {
@@ -4209,11 +5207,20 @@
       if (usingServerAuth()) {
         // Always paint the last encrypted server snapshot first, even for a
         // manual refresh. Revalidation runs independently of first paint.
-        payload = await readServerSnapshot(null, false);
-        if (payload) {
+        payload = (state.authProbe && state.authProbe.snapshotAvailable === false)
+          ? null
+          : await readServerSnapshot(null);
+        if (payload && !payload.__notModified) {
           applyServerSnapshot(payload, true);
-          if (!silent) setStatusBanner("info", "Showing cached data while GitHub is checked in the background…");
-          startServerSync(force, false);
+          var cachedMessage = snapshotStatusMessage(payload);
+          if (cachedMessage) setStatusBanner(cachedMessage.kind, cachedMessage.text);
+          else if (!silent) setStatusBanner("info", "Showing cached data while GitHub is checked in the background…");
+          // Do not block first paint on the queue request or the scan itself.
+          startServerSync(force, false, !force).catch(function (error) {
+            if (error && error.code === "AUTH_REQUIRED") {
+              expireServerSession("GITHUB AUTHORIZATION EXPIRED · AUTHORIZE AGAIN TO RELOAD PRIVATE DATA");
+            }
+          });
           return;
         }
         await requestServerSync(force);
@@ -4250,11 +5257,14 @@
         return;
       }
       if (e.code === "AUTH_REQUIRED") {
-        state.auth = null;
-        state.mode = "public";
         state.token = "";
         clearStoredToken();
-        showAuthGate(state.authProbe, "GITHUB AUTHORIZATION EXPIRED · AUTHORIZE AGAIN TO RELOAD PRIVATE DATA");
+        if (usingServerAuth()) expireServerSession("GITHUB AUTHORIZATION EXPIRED · AUTHORIZE AGAIN TO RELOAD PRIVATE DATA");
+        else {
+          state.auth = null;
+          state.mode = "public";
+          showAuthGate(state.authProbe, "GITHUB AUTHORIZATION EXPIRED · AUTHORIZE AGAIN TO RELOAD PRIVATE DATA");
+        }
         setStatusBanner("error", "GitHub authorization expired. Authorize again from the access gate.");
       } else if (e.code === "RATE_LIMIT") {
         setStatusBanner("error", "GitHub API rate limit reached. Add a personal access token to continue (60 → 5,000 req/hr).");
@@ -4285,6 +5295,14 @@
     renderRepositories();
     renderLanguages();
     renderPushLog();
+    renderFooter();
+    applyUrlState();
+    if (state.payload && !state.payload.loading && !REPOSITORIES.length) {
+      setStatusBanner("info", "This account has no repositories visible to the current session. Private repositories require GitHub authorization and the repo scope.");
+    }
+  }
+
+  function renderFooter() {
     setText("footer-status-text", "LIVE · @" + state.username + (state.privateCount ? " · PRIVATE ACCESS" : " · PUBLIC"));
     setText("hero-repo-link", HERO_COMMITS[0] ? HERO_COMMITS[0].repo : "—");
     var footer = document.querySelector("footer p");
@@ -4301,9 +5319,10 @@
       if (state.clockMode === "stopwatch") setText("hero-time-display", formatStopwatch(state.elapsedSeconds));
     }, 1000);
 
-    // Silent live synchronization. The five-second probe is conditional and
-    // only triggers the heavier account refresh when repository data changed.
-    setInterval(checkForLiveUpdates, 5000);
+    // Silent live synchronization. Broad polling is deliberately slow; the
+    // server's SSE stream carries sync progress, and the conditional probe
+    // only triggers a refresh when repository metadata actually changed.
+    setInterval(checkForLiveUpdates, 60_000);
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) checkForLiveUpdates();
     });
@@ -4378,6 +5397,8 @@
       btn.addEventListener("click", function () {
         playSound("relay");
         renderRangeData(btn.getAttribute("data-range"));
+        persistPreferences();
+        syncUrlState();
         showToast("RECALCULATED FOR " + btn.getAttribute("data-range"));
       });
     });
@@ -4410,14 +5431,20 @@
     search.addEventListener("input", function () {
       clearBtn.classList.toggle("hidden", !search.value);
       renderRepositories();
+      markFilterChanged();
     });
     clearBtn.addEventListener("click", function () {
       search.value = "";
       clearBtn.classList.add("hidden");
       renderRepositories();
+      markFilterChanged();
     });
     ["filter-lang", "filter-type", "filter-vis", "filter-sort"].forEach(function (id) {
-      document.getElementById(id).addEventListener("change", function () { playSound("tick"); renderRepositories(); });
+      document.getElementById(id).addEventListener("change", function () {
+        playSound("tick");
+        renderRepositories();
+        markFilterChanged();
+      });
     });
     document.getElementById("btn-view-ledger").addEventListener("click", function () { toggleRepoViewMode("ledger"); });
     document.getElementById("btn-view-lifespans").addEventListener("click", function () { toggleRepoViewMode("lifespans"); });
@@ -4499,9 +5526,9 @@
     });
     document.getElementById("btn-theme-toggle").addEventListener("click", function () {
       playSound("relay");
-      var isDark = document.documentElement.classList.toggle("dark");
-      setText("theme-icon", isDark ? "dark_mode" : "light_mode");
-      showToast(isDark ? "CARBON NIGHT FOLIO" : "WARM RAG PAPER FOLIO");
+      var next = document.documentElement.classList.contains("dark") ? "light" : "dark";
+      setThemeMode(next);
+      showToast(next === "dark" ? "CARBON NIGHT FOLIO" : "WARM RAG PAPER FOLIO");
     });
     document.getElementById("btn-sound-toggle").addEventListener("click", function () {
       soundEnabled = !soundEnabled;
@@ -4540,20 +5567,52 @@
       e.preventDefault();
       authorizePrimary();
     });
+    var localAuthBtn = document.getElementById("btn-local-auth");
+    if (localAuthBtn) localAuthBtn.addEventListener("click", authorizeLocalSession);
 
     document.getElementById("btn-shortcuts").addEventListener("click", function () { openModal("shortcuts-modal"); });
     document.getElementById("btn-close-shortcuts").addEventListener("click", closeAllModals);
-    document.getElementById("btn-clear-global-filter").addEventListener("click", function () { setGlobalRepoFilter(null); });
+    document.getElementById("btn-clear-global-filter").addEventListener("click", function () {
+      state.globalRepoFilter = null;
+      updateGlobalFilterBanner();
+      renderRepositories();
+      renderPushLog();
+      syncUrlState();
+    });
     document.getElementById("footer-btn-print").addEventListener("click", function () { window.print(); });
+    document.getElementById("footer-btn-glossary").addEventListener("click", function () { renderGlossary(); openModal("glossary-modal"); });
+    document.getElementById("footer-btn-sessions").addEventListener("click", openSessionsModal);
+    document.getElementById("footer-btn-density").addEventListener("click", function () {
+      applyDensity(state.density === "compact" ? "comfortable" : "compact");
+      showToast("DENSITY · " + state.density.toUpperCase());
+    });
+    document.getElementById("btn-glossary").addEventListener("click", function () { renderGlossary(); openModal("glossary-modal"); });
+    document.getElementById("btn-close-glossary").addEventListener("click", closeAllModals);
+    document.getElementById("btn-save-view").addEventListener("click", saveCurrentView);
+    document.getElementById("btn-delete-view").addEventListener("click", deleteActiveView);
+    document.getElementById("btn-copy-filter-link").addEventListener("click", copyFilterLink);
+    document.getElementById("btn-reset-filters").addEventListener("click", resetFilters);
+    document.getElementById("saved-view-select").addEventListener("change", function () {
+      if (this.value) applySavedView(this.value);
+    });
+    document.getElementById("btn-open-sessions").addEventListener("click", openSessionsModal);
+    document.getElementById("btn-close-sessions").addEventListener("click", closeAllModals);
+    document.getElementById("btn-revoke-others").addEventListener("click", revokeOtherSessions);
+    document.getElementById("btn-sign-out-everywhere").addEventListener("click", signOutEverywhere);
+    document.getElementById("btn-export-account").addEventListener("click", exportAccountData);
+    document.getElementById("btn-delete-account").addEventListener("click", deleteAccountData);
 
-    ["cmd-palette-modal", "profile-modal", "shortcuts-modal"].forEach(function (id) {
-      document.getElementById(id).addEventListener("click", function (e) { if (e.target === this) closeAllModals(); });
+    ["cmd-palette-modal", "profile-modal", "shortcuts-modal", "session-modal", "glossary-modal"].forEach(function (id) {
+      var modal = document.getElementById(id);
+      if (modal) modal.addEventListener("click", function (e) { if (e.target === this) closeAllModals(); });
     });
 
     // Keyboard
     document.addEventListener("keydown", function (e) {
       var gateEl = document.getElementById("auth-gate");
       if (gateEl && !gateEl.classList.contains("hidden")) return;
+      if (e.key === "Tab" && trapModalFocus(e)) return;
+      if (e.key === "Escape") { if (state.kioskActive) toggleKioskMode(); closeAllModals(); return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openModal("cmd-palette-modal"); return; }
       if (e.key === "Escape") { closeAllModals(); if (state.globalRepoFilter) setGlobalRepoFilter(null); return; }
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
@@ -4624,6 +5683,7 @@
       bL.className = "bg-primary text-surface px-2.5 py-1 font-semibold uppercase transition-colors";
       bF.className = "px-2.5 py-1 text-on-surface-variant hover:text-on-surface cursor-pointer uppercase transition-colors";
     }
+    if (typeof syncUrlState === "function") syncUrlState();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
