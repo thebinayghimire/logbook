@@ -16,7 +16,10 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const zlib = require("zlib");
 const { execFile } = require("child_process");
+const { SnapshotStore } = require("./snapshot-store");
+const { SyncEngine } = require("./sync-engine");
 
 // ---------------------------------------------------------------------------
 // Config
@@ -42,8 +45,14 @@ const ALLOW_LOCAL_AUTH = process.env.ALLOW_LOCAL_AUTH === "1" || (process.env.AL
 const OAUTH_CONFIGURED = Boolean(CLIENT_ID && CLIENT_SECRET);
 const GITHUB_API = "https://api.github.com";
 const GITHUB_WEB = "https://github.com";
+const DATA_DIR = path.resolve(process.env.LOGBOOK_DATA_DIR || path.join(ROOT, "data"));
+const snapshotStore = new SnapshotStore({
+  dataDir: DATA_DIR,
+  encryptionKey: process.env.SNAPSHOT_ENCRYPTION_KEY
+});
+const syncEngine = new SyncEngine(snapshotStore);
 
-/** @type {Map<string, {token:string, mode:string, login:string, profile:object, scopes:string, createdAt:number, lastUsed:number}>} */
+/** @type {Map<string, {token:string, mode:string, login:string, profile:object, scopes:string, createdAt:number, lastUsed:number, snapshot?:object, snapshotAt?:number}>} */
 const sessions = new Map();
 /** @type {Map<string, {verifier:string, expectedLogin:string, createdAt:number}>} */
 const pendingOAuth = new Map();
@@ -109,6 +118,26 @@ async function handle(req, res) {
     return logout(req, res);
   }
 
+  if (pathname === "/api/snapshot" && req.method === "GET") {
+    return getSnapshot(req, res, url);
+  }
+
+  if (pathname === "/api/snapshot" && req.method === "POST") {
+    return saveSnapshot(req, res);
+  }
+
+  if (pathname === "/api/sync" && req.method === "POST") {
+    return startSync(req, res, url);
+  }
+
+  if (pathname === "/api/sync" && req.method === "GET") {
+    return getSyncStatus(req, res);
+  }
+
+  if (pathname === "/api/sync" && req.method === "DELETE") {
+    return cancelSync(req, res);
+  }
+
   if (pathname.startsWith("/api/gh/") && req.method === "GET") {
     return proxyGitHub(req, res, pathname.slice("/api/gh".length) + url.search);
   }
@@ -141,12 +170,16 @@ async function handle(req, res) {
 function publicSessionState(req) {
   const session = getSession(req);
   if (session) {
+    const snapshot = snapshotStore.get(session.profile.id);
     return {
       authorized: true,
       mode: session.mode,
       login: session.login,
       profile: session.profile,
       scopes: session.scopes,
+      snapshotAvailable: Boolean(snapshot),
+      snapshotAt: snapshot ? snapshot.updatedAt : null,
+      sync: syncEngine.status(session.profile.id),
       expiresAt: session.createdAt + SESSION_TTL_MS
     };
   }
@@ -198,6 +231,74 @@ function logout(req, res) {
   if (!isTrustedRequest(req)) return sendJson(res, 403, { error: "forbidden" });
   destroySession(req, res);
   return sendJson(res, 200, { ok: true });
+}
+
+function getSnapshot(req, res, url) {
+  const session = getSession(req);
+  if (!session) return sendJson(res, 401, { error: "unauthorized" });
+  const record = snapshotStore.get(session.profile.id);
+  if (!record) return sendJson(res, 404, { error: "snapshot_missing" });
+  const etag = `"${record.contentHash}"`;
+  if (req.headers["if-none-match"] === etag) {
+    res.writeHead(304, { ETag: etag, "Cache-Control": "no-store" });
+    return res.end();
+  }
+  const payload = { ...record.payload };
+  const limit = Math.min(1000, Math.max(0, Number.parseInt(url.searchParams.get("commit_limit") || "0", 10)));
+  const cursor = Math.max(0, Number.parseInt(url.searchParams.get("cursor") || "0", 10));
+  if (limit && Array.isArray(payload.commits)) {
+    const total = payload.commits.length;
+    payload.commits = payload.commits.slice(cursor, cursor + limit);
+    payload.pagination = { cursor, limit, total, nextCursor: cursor + limit < total ? cursor + limit : null };
+  }
+  return sendCompressedJson(req, res, 200, payload, {
+    ETag: etag,
+    "X-Logbook-Snapshot-At": String(record.updatedAt),
+    "X-Logbook-Sections": Buffer.from(JSON.stringify(record.sectionHashes)).toString("base64url")
+  });
+}
+
+async function saveSnapshot(req, res) {
+  if (!isTrustedRequest(req)) return sendJson(res, 403, { error: "forbidden" });
+  const session = getSession(req);
+  if (!session) return sendJson(res, 401, { error: "unauthorized" });
+
+  let snapshot;
+  try {
+    snapshot = await readJsonBody(req, 25 * 1024 * 1024);
+  } catch (err) {
+    return sendJson(res, err.code === "BODY_TOO_LARGE" ? 413 : 400, { error: err.code || "invalid_json" });
+  }
+
+  if (!snapshot || typeof snapshot !== "object" ||
+      String(snapshot.username || "").toLowerCase() !== String(session.login || "").toLowerCase() ||
+      !Array.isArray(snapshot.repos) || !Array.isArray(snapshot.commits)) {
+    return sendJson(res, 400, { error: "invalid_snapshot" });
+  }
+
+  const saved = snapshotStore.put(session.profile.id, session.login, snapshot);
+  return sendJson(res, 200, { ok: true, snapshotAt: saved.updatedAt });
+}
+
+function startSync(req, res, url) {
+  if (!isTrustedRequest(req)) return sendJson(res, 403, { error: "forbidden" });
+  const session = getSession(req);
+  if (!session) return sendJson(res, 401, { error: "unauthorized" });
+  const job = syncEngine.enqueue(session, url.searchParams.get("force") === "1");
+  return sendJson(res, 202, job);
+}
+
+function getSyncStatus(req, res) {
+  const session = getSession(req);
+  if (!session) return sendJson(res, 401, { error: "unauthorized" });
+  return sendJson(res, 200, syncEngine.status(session.profile.id) || { state: "idle", phase: "idle", progress: 0 });
+}
+
+function cancelSync(req, res) {
+  if (!isTrustedRequest(req)) return sendJson(res, 403, { error: "forbidden" });
+  const session = getSession(req);
+  if (!session) return sendJson(res, 401, { error: "unauthorized" });
+  return sendJson(res, 200, { ok: syncEngine.cancel(session.profile.id) });
 }
 
 function beginOAuth(req, res, url) {
@@ -491,6 +592,38 @@ function isTrustedRequest(req) {
   }
 }
 
+function readJsonBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let settled = false;
+    req.on("data", (chunk) => {
+      if (settled) return;
+      size += chunk.length;
+      if (size > maxBytes) {
+        const err = new Error("request body too large");
+        err.code = "BODY_TOO_LARGE";
+        settled = true;
+        reject(err);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (settled) return;
+      try {
+        settled = true;
+        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "null"));
+      } catch (err) {
+        err.code = "INVALID_JSON";
+        settled = true;
+        reject(err);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Helpers: GitHub CLI
 // ---------------------------------------------------------------------------
@@ -565,6 +698,27 @@ function sendJson(res, status, body) {
     "Content-Length": data.length,
     "Cache-Control": "no-store"
   });
+  res.end(data);
+}
+
+function sendCompressedJson(req, res, status, body, headers) {
+  const raw = Buffer.from(JSON.stringify(body));
+  const accepted = String(req.headers["accept-encoding"] || "");
+  let data = raw;
+  let encoding = "";
+  if (raw.length > 1024 && accepted.includes("br")) {
+    data = zlib.brotliCompressSync(raw); encoding = "br";
+  } else if (raw.length > 1024 && accepted.includes("gzip")) {
+    data = zlib.gzipSync(raw); encoding = "gzip";
+  }
+  const out = Object.assign({
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": data.length,
+    "Cache-Control": "no-store",
+    Vary: "Accept-Encoding"
+  }, headers || {});
+  if (encoding) out["Content-Encoding"] = encoding;
+  res.writeHead(status, out);
   res.end(data);
 }
 

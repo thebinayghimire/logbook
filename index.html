@@ -115,21 +115,21 @@
     :root {
       --c-surface: #fcf9f2;
       --c-surface-lowest: #ffffff;
-      --c-surface-low: #f6f3ec;
-      --c-surface-container: #f1eee7;
-      --c-surface-high: #ebe8e1;
-      --c-surface-highest: #e5e2db;
-      --c-surface-dim: #dcdad3;
-      --c-on-surface: #1c1c18;
-      --c-on-surface-variant: #49473f;
+      --c-surface-low: #f3efe6;
+      --c-surface-container: #ede9df;
+      --c-surface-high: #e7e4db;
+      --c-surface-highest: #dfdcd3;
+      --c-surface-dim: #d5d2cb;
+      --c-on-surface: #17160F;
+      --c-on-surface-variant: #3d3b34;
       --c-primary: #17160F;
       --c-secondary: #b51c00;
-      --c-outline: #7a776e;
-      --c-outline-variant: #cac6bc;
-      --hm-0: #E6E1D3;
-      --hm-1: #C9C2AE;
-      --hm-2: #9A9380;
-      --hm-3: #5A5648;
+      --c-outline: #6e6a5f;
+      --c-outline-variant: #b0a997;
+      --hm-0: #d6ccb4;
+      --hm-1: #bdae94;
+      --hm-2: #8c8370;
+      --hm-3: #4d493e;
       --hm-4: #17160F;
     }
     html.dark {
@@ -1515,6 +1515,13 @@
     authProbe: null,
     privateCount: 0,
     loading: false,
+    liveSyncChecking: false,
+    liveSyncETag: "",
+    liveSyncSignature: "",
+    liveSyncBackoffUntil: 0,
+    snapshotETag: "",
+    snapshotSections: null,
+    serverSyncPolling: false,
     error: null,
     rate: null,
     patchCache: {},
@@ -1809,7 +1816,7 @@
       state.username = probe.login;
       clearStoredToken();
       hideAuthGate();
-      await reloadAccount(probe.login, true);
+      await reloadAccount(probe.login, false);
       return;
     }
 
@@ -3971,7 +3978,209 @@
     } catch (e) { return null; }
   }
 
-  async function reloadAccount(username, force) {
+  function liveRepoSignature(repos) {
+    if (!Array.isArray(repos)) return "";
+    return repos.map(function (repo) {
+      return [
+        repo.id, repo.pushed_at, repo.updated_at, repo.size, repo.language,
+        repo.stargazers_count, repo.open_issues_count, repo.private, repo.archived
+      ].join(":");
+    }).join("|");
+  }
+
+  async function checkForLiveUpdates() {
+    if (document.hidden || state.liveSyncChecking || state.loading) return "busy";
+    if (!usingServerAuth() || !state.auth || !state.auth.login) return "unauthorized";
+    if (Date.now() < state.liveSyncBackoffUntil) return "backoff";
+
+    state.liveSyncChecking = true;
+    try {
+      var headers = { "Accept": "application/vnd.github+json" };
+      if (state.liveSyncETag) headers["If-None-Match"] = state.liveSyncETag;
+      var path = "/user/repos?affiliation=owner,collaborator,organization_member&visibility=all&sort=pushed&direction=desc&per_page=100&page=1";
+      var res = await fetch(PROXY_ROOT + path, {
+        headers: headers,
+        credentials: "same-origin",
+        cache: "no-store"
+      });
+
+      if (res.status === 304) return "current";
+      if (res.status === 401) {
+        state.auth = null;
+        showAuthGate(state.authProbe, "GITHUB AUTHORIZATION EXPIRED · AUTHORIZE AGAIN TO CONTINUE");
+        return "unauthorized";
+      }
+      if (res.status === 403 || res.status === 429) {
+        var retryAfter = parseInt(res.headers.get("retry-after") || "60", 10);
+        state.liveSyncBackoffUntil = Date.now() + Math.max(60, retryAfter) * 1000;
+        return "backoff";
+      }
+      if (!res.ok) return "offline";
+
+      var repos = await res.json();
+      var nextETag = res.headers.get("etag") || "";
+      var nextSignature = liveRepoSignature(repos);
+      var hasBaseline = !!(state.liveSyncETag || state.liveSyncSignature);
+      var changed = hasBaseline && nextSignature !== state.liveSyncSignature;
+      state.liveSyncETag = nextETag;
+      state.liveSyncSignature = nextSignature;
+
+      if (changed) {
+        if (usingServerAuth()) startServerSync(false);
+        else await reloadAccount(state.auth.login, true, { silent: true });
+        return "updated";
+      }
+      return "current";
+    } catch (e) {
+      // Background synchronization is intentionally invisible. A later tick
+      // retries after transient network failures without disturbing the UI.
+      return "offline";
+    } finally {
+      state.liveSyncChecking = false;
+    }
+  }
+
+  function revivePayload(payload) {
+    if (!payload || !Array.isArray(payload.commits)) return null;
+    payload.commits = payload.commits.map(function (item) {
+      item.date = new Date(item.iso);
+      return item;
+    });
+    return payload;
+  }
+
+  function decodeSnapshotSections(value) {
+    if (!value) return null;
+    try {
+      var base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+      while (base64.length % 4) base64 += "=";
+      return JSON.parse(atob(base64));
+    } catch (e) { return null; }
+  }
+
+  async function readServerSnapshot(maxAgeMs, full) {
+    if (!usingServerAuth()) return null;
+    try {
+      var headers = { "Accept": "application/json" };
+      var res = await fetch(AUTH_API + "/snapshot" + (full ? "" : "?commit_limit=250"), {
+        headers: headers,
+        credentials: "same-origin",
+        cache: "no-store"
+      });
+      if (!res.ok) return null;
+      var payload = await res.json();
+      if (!payload || String(payload.username || "").toLowerCase() !== String(state.username || "").toLowerCase()) return null;
+      if (maxAgeMs != null && (Date.now() - Number(payload.fetchedAt || 0)) > maxAgeMs) return null;
+      payload = revivePayload(payload);
+      payload.__snapshotMeta = {
+        etag: res.headers.get("etag") || "",
+        sections: decodeSnapshotSections(res.headers.get("x-logbook-sections")),
+        at: Number(res.headers.get("x-logbook-snapshot-at") || 0)
+      };
+      return payload;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function requestServerSync(force) {
+    var res = await fetch(AUTH_API + "/sync" + (force ? "?force=1" : ""), {
+      method: "POST",
+      headers: { "Accept": "application/json", "X-Logbook-Auth": "1" },
+      credentials: "same-origin"
+    });
+    if (res.status === 401) { var e = new Error("authorization expired"); e.code = "AUTH_REQUIRED"; throw e; }
+    if (!res.ok) throw new Error("Could not queue account refresh");
+    return res.json();
+  }
+
+  function applyServerSnapshot(payload, initial) {
+    var meta = payload.__snapshotMeta || {};
+    delete payload.__snapshotMeta;
+    var previous = state.snapshotSections;
+    state.snapshotETag = meta.etag || state.snapshotETag;
+    state.snapshotSections = meta.sections || state.snapshotSections;
+    state.liveSyncSignature = liveRepoSignature(payload.repos);
+    state.privateCount = payload.privateRepos || 0;
+    hydrate(payload);
+    if (initial || !previous || !meta.sections) {
+      bootRender();
+      return;
+    }
+    var changed = function (name) { return previous[name] !== meta.sections[name]; };
+    if (changed("profile")) renderHeader();
+    if (changed("repositories") || changed("commits")) populateSelectors();
+    if (changed("repositories")) renderRepositories();
+    if (changed("languages")) renderLanguages();
+    if (changed("commits")) {
+      renderHeroCommit(0); renderLast7(); renderNowStats(); renderHeatmap(state.currentYear);
+      renderPunchCard(); renderPushLog();
+    }
+    if (changed("repositories") || changed("commits")) renderRangeData(state.currentRange);
+  }
+
+  async function pollServerSync(initialNeeded) {
+    if (state.serverSyncPolling) return;
+    state.serverSyncPolling = true;
+    var lastETag = state.snapshotETag;
+    try {
+      for (var attempt = 0; attempt < 120 && usingServerAuth(); attempt++) {
+        await new Promise(function (resolve) { setTimeout(resolve, attempt < 10 ? 500 : 1500); });
+        var statusRes = await fetch(AUTH_API + "/sync", { credentials: "same-origin", cache: "no-store" });
+        if (!statusRes.ok) break;
+        var job = await statusRes.json();
+        var snapshot = await readServerSnapshot(null, job.state === "current" || job.state === "partial");
+        if (snapshot && (initialNeeded || !lastETag || (snapshot.__snapshotMeta && snapshot.__snapshotMeta.etag !== lastETag))) {
+          applyServerSnapshot(snapshot, initialNeeded);
+          initialNeeded = false;
+          lastETag = state.snapshotETag;
+        }
+        var label = document.getElementById("sync-label");
+        if (label && job.state === "scanning") label.textContent = "Indexing " + job.progress + "%";
+        if (["current", "partial", "failed", "cancelled"].indexOf(job.state) !== -1) {
+          if (label && state.payload) label.textContent = "Synced " + relTime(new Date(state.payload.fetchedAt || Date.now()));
+          if (job.state === "failed") setStatusBanner("warn", "Background refresh failed — the last known snapshot remains available.");
+          else if (job.state === "partial") setStatusBanner("warn", "Refresh completed with partial repository data.");
+          else setStatusBanner(null);
+          break;
+        }
+      }
+    } catch (e) {
+      if (initialNeeded) setStatusBanner("error", "Could not build the first account snapshot: " + String(e.message || e));
+    } finally {
+      state.serverSyncPolling = false;
+    }
+  }
+
+  async function startServerSync(force, initialNeeded) {
+    try {
+      await requestServerSync(force);
+      pollServerSync(!!initialNeeded);
+    } catch (e) {
+      if (e.code === "AUTH_REQUIRED") throw e;
+      setStatusBanner("warn", "Showing the last known snapshot; background refresh could not start.");
+    }
+  }
+
+  function saveServerSnapshot(payload) {
+    if (!usingServerAuth() || !payload) return;
+    setTimeout(function () {
+      fetch(AUTH_API + "/snapshot", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-Logbook-Auth": "1"
+        },
+        credentials: "same-origin",
+        body: JSON.stringify(payload)
+      }).catch(function () {});
+    }, 0);
+  }
+
+  async function reloadAccount(username, force, options) {
+    options = options || {};
+    var silent = !!options.silent;
     if (state.loading) return;
     state.loading = true;
     state.error = null;
@@ -3989,32 +4198,49 @@
     }
     state.username = requested;
 
-    setStatusBanner("info", "Fetching live telemetry from github.com/" + state.username + "…");
+    if (!silent) setStatusBanner("info", "Fetching live telemetry from github.com/" + state.username + "…");
     var icon = document.getElementById("sync-icon");
-    if (icon) icon.classList.add("animate-spin");
+    if (icon && !silent) icon.classList.add("animate-spin");
     var label = document.getElementById("sync-label");
-    if (label) label.textContent = "Syncing…";
+    if (label && !silent) label.textContent = "Syncing…";
 
     try {
-      var payload = force ? null : readCache(CACHE_TTL_MS);
+      var payload = usingServerAuth() ? null : (force ? null : readCache(CACHE_TTL_MS));
+      if (usingServerAuth()) {
+        // Always paint the last encrypted server snapshot first, even for a
+        // manual refresh. Revalidation runs independently of first paint.
+        payload = await readServerSnapshot(null, false);
+        if (payload) {
+          applyServerSnapshot(payload, true);
+          if (!silent) setStatusBanner("info", "Showing cached data while GitHub is checked in the background…");
+          startServerSync(force, false);
+          return;
+        }
+        await requestServerSync(force);
+        pollServerSync(true);
+        if (!silent) setStatusBanner("info", "Dashboard ready · loading profile and repository totals…");
+        return;
+      }
       if (!payload) {
         payload = await fetchAccount(state.username);
         if (!payload.partial && state.mode === "public") {
           try { localStorage.setItem(CACHE_KEY, JSON.stringify(payload)); } catch (e) {}
         }
       }
+      state.liveSyncSignature = liveRepoSignature(payload.repos);
       state.privateCount = payload.privateRepos || 0;
       hydrate(payload);
       bootRender();
-      if (payload.partial) {
+      if (payload.partial && !silent) {
         setStatusBanner("warn", "Partial data — " + payload.failedRepos + " repositories could not be scanned (empty, inaccessible, or rate-limited). Totals may be incomplete; add a token for the full history.");
-      } else {
+      } else if (!silent) {
         setStatusBanner(null);
       }
-      if (label) label.textContent = "Synced " + relTime(new Date(payload.fetchedAt || Date.now()));
-      showToast("LOADED @" + state.username.toUpperCase() + " · " + SUMMARY.commits + " COMMITS · " + REPOSITORIES.length + " REPOS" + (state.privateCount ? " · " + state.privateCount + " PRIVATE" : ""));
+      if (label && !silent) label.textContent = "Synced " + relTime(new Date(payload.fetchedAt || Date.now()));
+      if (!silent) showToast("LOADED @" + state.username.toUpperCase() + " · " + SUMMARY.commits + " COMMITS · " + REPOSITORIES.length + " REPOS" + (state.privateCount ? " · " + state.privateCount + " PRIVATE" : ""));
     } catch (e) {
       state.error = e;
+      if (silent && e.code !== "AUTH_REQUIRED") return;
       var stale = readCache(null);
       if (stale) {
         hydrate(stale);
@@ -4040,7 +4266,7 @@
       showToast("SYNC FAILED — CHECK CONNECTION OR TOKEN");
     } finally {
       state.loading = false;
-      if (icon) icon.classList.remove("animate-spin");
+      if (icon && !silent) icon.classList.remove("animate-spin");
     }
   }
 
@@ -4074,6 +4300,13 @@
       state.elapsedSeconds++;
       if (state.clockMode === "stopwatch") setText("hero-time-display", formatStopwatch(state.elapsedSeconds));
     }, 1000);
+
+    // Silent live synchronization. The five-second probe is conditional and
+    // only triggers the heavier account refresh when repository data changed.
+    setInterval(checkForLiveUpdates, 5000);
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) checkForLiveUpdates();
+    });
 
     document.getElementById("btn-toggle-clock-mode").addEventListener("click", function () {
       playSound("tick");
@@ -4253,7 +4486,16 @@
     // Header buttons
     document.getElementById("btn-sync").addEventListener("click", function () {
       playSound("relay");
-      reloadAccount(state.username, true);
+      var icon = document.getElementById("sync-icon");
+      var label = document.getElementById("sync-label");
+      if (icon) icon.classList.add("animate-spin");
+      if (label) label.textContent = "Checking…";
+      checkForLiveUpdates().then(function (result) {
+        if (icon) icon.classList.remove("animate-spin");
+        if (label) label.textContent = result === "updated" ? "Updated just now" : "Synced just now";
+        if (result === "updated") showToast("LIVE DATA UPDATED");
+        else if (result === "current") showToast("ALREADY UP TO DATE");
+      });
     });
     document.getElementById("btn-theme-toggle").addEventListener("click", function () {
       playSound("relay");

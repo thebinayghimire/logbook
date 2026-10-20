@@ -18,3 +18,4 @@ npm-debug.log*
 # Local secrets / auth bridge
 .env
 .env.local
+data/

@@ -17,6 +17,10 @@ After authorization, the account dossier shows the authenticated profile, access
 
 The bridge only makes read-only `GET` requests to the GitHub API. It never writes to GitHub.
 
+After authorization, the dashboard performs a silent conditional repository check every five seconds while the tab is visible. Unchanged `304 Not Modified` responses do not consume the authenticated primary rate limit. A full account refresh runs only when the repository signature changes; background checks do not show spinners, banners, or toast notifications. Rate-limit responses trigger an automatic backoff.
+
+The first authorized account scan is cached as a private in-memory snapshot attached to that server session. Page refreshes restore this snapshot immediately instead of repeating the repository crawl, and the manual Sync control performs the same lightweight conditional check before deciding whether a full refresh is necessary. Snapshots are never written to disk and disappear on sign-out, session expiry, or server restart.
+
 ## What the dashboard shows
 
 | Section | Contents |
