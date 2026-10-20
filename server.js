@@ -25,6 +25,7 @@ const { SyncEngine } = require("./sync-engine");
 const {
   digest,
   randomToken,
+  pkceChallenge,
   timingSafeEqual,
   sanitizeReturnTo,
   parseCookies,
@@ -755,7 +756,7 @@ function beginOAuth(req, res, url) {
 
   const state = randomToken(24);
   const verifier = randomToken(48);
-  const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
+  const challenge = pkceChallenge(verifier);
   pendingOAuth.set(state, {
     verifier,
     expectedLogin: expectedLogin.toLowerCase(),

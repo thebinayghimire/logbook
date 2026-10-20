@@ -89,7 +89,7 @@ class SessionStore {
     `);
     this.auditListStmt = this.db.prepare(`
       SELECT action, detail, created_at FROM audit_log
-       WHERE account_id = ? ORDER BY created_at DESC LIMIT ?
+       WHERE account_id = ? ORDER BY created_at DESC, id DESC LIMIT ?
     `);
     this.pruneAuditStmt = this.db.prepare("DELETE FROM audit_log WHERE created_at < ?");
     this.getPrefsStmt = this.db.prepare("SELECT payload, updated_at FROM preferences WHERE account_id = ?");
@@ -160,7 +160,11 @@ class SessionStore {
     }
     // Avoid a write on every request; 30 seconds is accurate enough for the
     // session-management screen and keeps SQLite contention low.
-    if (now - row.last_used_at > 30_000) this.touch.run(now, sidHash);
+    let lastUsed = row.last_used_at;
+    if (now - row.last_used_at > 30_000) {
+      this.touch.run(now, sidHash);
+      lastUsed = now;
+    }
     return {
       sid,
       publicId: row.public_id,
@@ -170,7 +174,7 @@ class SessionStore {
       profile: { id: Number(row.account_id), login: row.login },
       scopes: row.scopes,
       createdAt: row.created_at,
-      lastUsed: Math.max(row.last_used_at, now),
+      lastUsed,
       expiresAt: row.expires_at
     };
   }

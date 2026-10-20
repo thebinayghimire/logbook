@@ -20,6 +20,11 @@ function randomToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
+/** RFC 7636 S256 challenge for a PKCE verifier. */
+function pkceChallenge(verifier) {
+  return crypto.createHash("sha256").update(String(verifier || "")).digest("base64url");
+}
+
 /** Constant-time comparison that also tolerates missing values. */
 function timingSafeEqual(a, b) {
   const left = Buffer.from(String(a || ""));
@@ -146,7 +151,7 @@ function buildCsp(nonce, options = {}) {
 }
 
 function injectCspNonce(html, nonce) {
-  return String(html).replace(/<script(?![^>]*\bnonce=)/gi, `<script nonce="${nonce}"`);
+  return String(html).replace(/<(script)(?![^>]*\bnonce=)/gi, `<$1 nonce="${nonce}"`);
 }
 
 function isSecureRequest(req) {
@@ -158,6 +163,7 @@ module.exports = {
   MAX_RETURN_TO_LENGTH,
   digest,
   randomToken,
+  pkceChallenge,
   timingSafeEqual,
   sanitizeReturnTo,
   parseCookies,

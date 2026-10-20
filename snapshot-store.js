@@ -153,6 +153,10 @@ class SnapshotStore {
       return false;
     }
   }
+
+  close() {
+    try { this.db.close(); } catch (error) { /* already closed */ }
+  }
 }
 
 function digest(value) {

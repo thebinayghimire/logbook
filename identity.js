@@ -30,7 +30,9 @@ function buildAuthorIdentity(profile, emails = []) {
   const verified = new Set();
   for (const entry of Array.isArray(emails) ? emails : []) {
     const email = typeof entry === "string" ? entry : entry && entry.email;
-    const isVerified = typeof entry === "object" && entry ? entry.visibility !== "private" || entry.verified !== false : true;
+    // GitHub marks every address with an explicit `verified` flag. Never
+    // attribute a commit through an address the account has not verified.
+    const isVerified = typeof entry === "string" || !entry || entry.verified === undefined || entry.verified === true;
     if (email && isVerified) verified.add(String(email).toLowerCase());
   }
   if (profile && profile.email) verified.add(String(profile.email).toLowerCase());
