@@ -36,7 +36,7 @@ Sessions, encrypted GitHub tokens, server-side preferences, and audit records li
 
 The header account dossier (`@handle`) is the private-data view: identity, bio, location, website, join date, counts, private repositories, orgs, stars, gists, followers, and following. It also has the sign-out control.
 
-Filters are mirrored in the URL for bookmarking and browser back/forward. Named saved views store the current filter set per account. The footer and filter bar open a metric glossary that explains commit attribution, active days, streaks, code volume, reviews, scan limits, and partial data.
+Filters are mirrored in the URL for bookmarking and reloads. Named saved views store the current filter set per account. The footer and filter bar open a metric glossary that explains commit attribution, active days, streaks, code volume, reviews, scan limits, and partial data.
 
 ## Data sources
 
@@ -61,7 +61,7 @@ Commits are attributed to the authorized account by linked GitHub login, or by a
 
 ### Derived, not fetched
 
-- **Contribution heatmap** — uses GitHub's official GraphQL contribution calendar when available, which includes private and organization contributions. If GraphQL is unavailable, the UI clearly labels a locally derived fallback built from scanned commit timestamps.
+- **Contribution heatmap** — uses GitHub's official GraphQL contribution calendar when available, which reflects private and organization contributions when the account has enabled them. If GraphQL is unavailable, the UI clearly labels a locally derived fallback built from scanned commit timestamps.
 - **Punch card** — weekday × hour buckets from attributed commit timestamps.
 - **KPI sparklines** — commit counts binned across the selected window.
 - **Code volume** — sum of language byte totals, not a `git diff` line count.
@@ -168,7 +168,7 @@ Deletion removes Logbook's copy of the data but does **not** revoke the OAuth ap
 | `GET /auth/github`, `GET /auth/github/callback` | OAuth start and callback |
 | `GET /auth/logout`, `GET /logout` | Cookie-based session logout |
 
-Mutating routes require the CSRF and origin headers described above. Health probes are intentionally unauthenticated.
+Authenticated mutating routes require the CSRF and origin headers described above. Health probes are intentionally unauthenticated.
 
 ## Deployment
 
