@@ -1,19 +1,17 @@
 # Logbook
 
-An interactive GitHub archival telemetry folio. The frontend is a single HTML file with no build step. The optional Node bridge adds an authorization-first GitHub flow, OAuth, and local `gh` CLI sessions.
-
-**Static preview:** https://thebinayghimire.github.io/logbook/ — a static host can use a personal access token or public-only mode; OAuth and local `gh` authorization need the Node bridge.
+An interactive GitHub archival telemetry folio. The frontend is a single HTML file with no build step. The Node bridge provides a username-first GitHub OAuth flow and keeps access tokens out of the browser.
 
 ## Authorization first
 
-Nothing is fetched from GitHub until you explicitly authorize. On load, the page first probes the local bridge and shows a full-screen access gate:
+Nothing is fetched from GitHub until the visitor explicitly authorizes. The entry flow is:
 
-| Choice | What it does | Requirements |
-|---|---|---|
-| **Authorize with GitHub** | GitHub OAuth web flow with PKCE and `state` | `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET`, Node bridge |
-| **Authorize @you** | Adopts the existing GitHub CLI token | `gh auth login`, Node bridge on loopback |
-| **Use access token** | Verifies a personal access token directly with GitHub | Token with `repo` scope for private repositories |
-| **Public only** | Loads only public profile/repositories; no private data | None; works on static hosting |
+1. Enter a GitHub username.
+2. Continue to GitHub's OAuth consent screen.
+3. Logbook verifies that the authorizing GitHub account matches the entered username.
+4. The authorized account's telemetry is fetched and displayed.
+
+The app does not offer an unauthenticated public-data bypass on the entry screen. A Node deployment with `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` is required; a static-only host cannot complete this flow.
 
 After authorization, the account dossier shows the authenticated profile, accessible/private/public repository counts, the private repository ledger, organizations, starred repositories, gists, followers, and following. The main ledger includes **all repositories the token can access** — owner, collaborator, and organization-member repositories, public and private.
 
@@ -69,7 +67,7 @@ npm start
 
 `npm start` runs the zero-dependency bridge in `server.js`, serves the static folio, and enables the authorization gate. Use `PORT` and `HOST` to change the listener.
 
-### Option A — GitHub OAuth app (recommended for a Node deployment)
+### GitHub OAuth app (required)
 
 1. Create an OAuth app at <https://github.com/settings/developers>.
 2. Set the homepage URL to your site, for example `http://127.0.0.1:8080`.
@@ -78,26 +76,6 @@ npm start
 5. Restart `npm start`.
 
 The callback URL must match `GITHUB_CALLBACK_URL` exactly, and the hostname must match the one you open in the browser: OAuth state cookies are scoped to `localhost` or `127.0.0.1`, not both. On a public deployment use an HTTPS callback and set `ALLOW_LOCAL_AUTH=0`.
-
-### Option B — GitHub CLI session (local development)
-
-```powershell
-gh auth login
-gh auth status
-npm start
-```
-
-If the bridge is running on loopback and `gh` is authenticated, the gate offers **Authorize @your-login**. The token is read from `gh auth token` by the bridge and never sent to the browser. Local authorization is disabled by default when `HOST` is not a loopback address. If you created `.env` from the example, set `ALLOW_LOCAL_AUTH=1` on a trusted local machine to enable this fallback.
-
-### Option C — personal access token
-
-Open the gate, choose **Use access token**, and paste a classic token with `repo` scope (plus `read:org` and `gist` for the complete dossier), or a fine-grained token with read access to the repositories you want. The token is verified against `GET /user` before any data is loaded.
-
-Token mode stores the token in `sessionStorage` for that tab and sends it directly to `api.github.com`; it does not use the bridge. Use **Sign out** to clear it.
-
-### Option D — public only
-
-Choose **Public only** to browse public data without authorization. This deliberately destroys any server-side private session and hides the private dossier. **Authorize GitHub** in the account dossier reopens the consent gate.
 
 ## Configuration
 
@@ -117,7 +95,8 @@ Copy `.env.example` to `.env`; `.env` is ignored by git.
 ## Security model
 
 - **No token in the page for server sessions.** OAuth and local `gh` tokens live in the bridge's in-memory session map. The browser receives only an `HttpOnly`, `SameSite=Lax` session cookie.
-- **Authorization before fetch.** The page probes `/api/session` and shows the gate before requesting any GitHub data. Public-only mode does not request private data and discards any server-side session.
+- **Authorization before any fetch.** The page probes `/api/session` and shows the username-first consent gate before requesting GitHub account data.
+- **Account binding.** The requested username is stored with the one-time OAuth state. The callback rejects authorization when the GitHub account that consented does not match that username.
 - **No private payload persistence.** Private accounts and repository payloads are never written to `localStorage`. Only public telemetry is cached, for up to six hours.
 - **OAuth state + PKCE.** The bridge stores a one-time `state` and PKCE verifier, sets an `HttpOnly` state cookie, verifies both on callback, and exchanges the code server-side.
 - **Read-only proxy.** `/api/gh/*` accepts `GET` only and forwards a GitHub token from the server session. It is not an open proxy: a valid session is required.
@@ -133,7 +112,7 @@ The bridge is intentionally small and single-process: sessions are in memory and
 
 ### Static hosting (GitHub Pages)
 
-Static hosting can run the folio, but not the Node bridge. The gate reports **BRIDGE OFFLINE · STATIC MODE**; OAuth and local `gh` authorization are unavailable. Use **Use access token** or **Public only**. Unauthenticated GitHub requests are limited to 60/hour per IP, and only public data is available.
+Static hosting can run the folio, but not the Node bridge. If no bridge answers and no token is stored, the page opens the public-only ledger automatically. Open the account dossier to add a personal access token or reopen the authorization gate; OAuth and local `gh` authorization remain unavailable. Unauthenticated GitHub requests are limited to 60/hour per IP, and only public data is available.
 
 ### Node hosting
 

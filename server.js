@@ -45,7 +45,7 @@ const GITHUB_WEB = "https://github.com";
 
 /** @type {Map<string, {token:string, mode:string, login:string, profile:object, scopes:string, createdAt:number, lastUsed:number}>} */
 const sessions = new Map();
-/** @type {Map<string, {verifier:string, createdAt:number}>} */
+/** @type {Map<string, {verifier:string, expectedLogin:string, createdAt:number}>} */
 const pendingOAuth = new Map();
 const localGh = { available: false, login: null, scopes: null, checkedAt: 0 };
 
@@ -114,7 +114,7 @@ async function handle(req, res) {
   }
 
   if (pathname === "/auth/github" && req.method === "GET") {
-    return beginOAuth(req, res);
+    return beginOAuth(req, res, url);
   }
 
   if (pathname === "/auth/github/callback" && req.method === "GET") {
@@ -200,21 +200,28 @@ function logout(req, res) {
   return sendJson(res, 200, { ok: true });
 }
 
-function beginOAuth(req, res) {
+function beginOAuth(req, res, url) {
   if (!OAUTH_CONFIGURED) {
     return sendHtml(res, 503, "<h1>GitHub OAuth is not configured</h1><p>Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env, then restart the server.</p>");
+  }
+
+  const expectedLogin = String(url.searchParams.get("username") || "").trim().replace(/^@/, "");
+  if (!isValidGitHubLogin(expectedLogin)) {
+    res.writeHead(302, { Location: "/?auth_error=invalid_username" });
+    return res.end();
   }
 
   const state = randomToken(24);
   const verifier = randomToken(48);
   const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
-  pendingOAuth.set(state, { verifier, createdAt: Date.now() });
+  pendingOAuth.set(state, { verifier, expectedLogin: expectedLogin.toLowerCase(), createdAt: Date.now() });
 
   const authorize = new URL(`${GITHUB_WEB}/login/oauth/authorize`);
   authorize.searchParams.set("client_id", CLIENT_ID);
   authorize.searchParams.set("redirect_uri", CALLBACK_URL);
   authorize.searchParams.set("scope", OAUTH_SCOPE);
   authorize.searchParams.set("state", state);
+  authorize.searchParams.set("login", expectedLogin);
   authorize.searchParams.set("code_challenge", challenge);
   authorize.searchParams.set("code_challenge_method", "S256");
   authorize.searchParams.set("allow_signup", "false");
@@ -266,6 +273,10 @@ async function finishOAuth(req, res, url) {
     }
 
     const profile = await githubProfile(tokenJson.access_token);
+    if (String(profile.login || "").toLowerCase() !== pending.expectedLogin) {
+      console.warn(`[logbook] OAuth account mismatch: requested @${pending.expectedLogin}, authorized @${profile.login || "unknown"}`);
+      return fail("account_mismatch");
+    }
     const session = createSession(
       tokenJson.access_token,
       "oauth",
@@ -521,6 +532,10 @@ function runGh(args, timeout) {
 // ---------------------------------------------------------------------------
 // Helpers: misc
 // ---------------------------------------------------------------------------
+
+function isValidGitHubLogin(value) {
+  return /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i.test(String(value || ""));
+}
 
 function loadDotEnv() {
   const file = path.join(__dirname, ".env");

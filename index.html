@@ -157,6 +157,10 @@
       body { overscroll-behavior: none; transition: background-color 0.25s ease, color 0.25s ease; }
       main > :first-child { margin-top: 0 !important; }
       main > :last-child { margin-bottom: 0 !important; }
+      main section[id] { scroll-margin-top: 4.5rem; }
+      @media (min-width: 1024px) {
+        main section[id] { scroll-margin-top: 7rem; }
+      }
     }
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: var(--c-surface); }
@@ -182,6 +186,25 @@
     .hm-cell:hover {
       transform: scale(1.18);
       z-index: 20;
+    }
+    .heatmap-peak-callout,
+    .heatmap-streak-bracket,
+    .heatmap-streak-label {
+      position: absolute;
+      pointer-events: none;
+      transition: left 0.3s ease, width 0.3s ease;
+    }
+    .heatmap-peak-callout {
+      top: -1.55rem;
+      white-space: nowrap;
+    }
+    .heatmap-streak-bracket {
+      top: calc(100% + 0.4rem);
+      height: 0.25rem;
+    }
+    .heatmap-streak-label {
+      top: calc(100% + 0.3rem);
+      white-space: nowrap;
     }
     .punch-dot {
       transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.18s ease;
@@ -211,105 +234,78 @@
 </head>
 <body class="bg-surface text-on-surface selection:bg-primary selection:text-surface antialiased min-h-screen flex flex-col paper-grain">
   <!-- =========================================================================
-       00. GITHUB AUTHORIZATION GATE — shown before any GitHub data is fetched
+       00. USERNAME-FIRST GITHUB CONSENT — no account data before authorization
        ========================================================================= -->
   <div class="fixed inset-0 z-[200] bg-surface text-on-surface overflow-y-auto" id="auth-gate">
     <div class="min-h-full w-full max-w-[1360px] mx-auto px-margin md:px-margin-desktop py-6 md:py-10 flex flex-col">
       <div class="flex flex-wrap items-center justify-between gap-2 border-b border-outline-variant/60 pb-3">
         <div class="flex items-center gap-2.5">
           <span class="w-2 h-2 bg-secondary"></span>
-          <span class="font-label-mono-bold uppercase tracking-widest">LOGBOOK / GITHUB AUTHORIZATION</span>
-          <span class="font-label-mono text-[9px] text-on-surface-variant border border-outline-variant/60 px-1.5 py-0.5">READ ONLY</span>
+          <span class="font-label-mono-bold uppercase tracking-widest">LOGBOOK / OPEN YOUR LEDGER</span>
+          <span class="font-label-mono text-[9px] text-on-surface-variant border border-outline-variant/60 px-1.5 py-0.5">CONSENT REQUIRED</span>
         </div>
-        <span class="font-label-mono text-[10px] uppercase text-on-surface-variant" id="auth-bridge-status">CHECKING AUTHORIZATION BRIDGE…</span>
+        <span class="font-label-mono text-[10px] uppercase text-on-surface-variant" id="auth-bridge-status">CHECKING SECURE CONNECTION…</span>
       </div>
 
-      <div class="grid lg:grid-cols-[1.45fr_1fr] gap-8 lg:gap-16 pt-8 md:pt-14 flex-1">
+      <div class="grid lg:grid-cols-[1.35fr_0.85fr] gap-10 lg:gap-20 py-10 md:py-16 flex-1 items-center">
         <div class="max-w-2xl">
-          <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-secondary mb-4">ACCESS REQUEST · EXPLICIT CONSENT</div>
-          <h1 class="font-headline-xl text-[2.7rem] sm:text-[3.6rem] lg:text-[4.4rem] leading-[0.94] tracking-tight">
-            Private ledgers<br/>
-            open only after<br/>
-            <em class="text-secondary">you allow it.</em>
+          <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-secondary mb-4">YOUR GITHUB, AS A LIVING ARCHIVE</div>
+          <h1 class="font-headline-xl text-[2.8rem] sm:text-[3.8rem] lg:text-[4.7rem] leading-[0.94] tracking-tight">
+            Enter your handle.<br/>
+            Authorize access.<br/>
+            <em class="text-secondary">See the whole story.</em>
           </h1>
-          <p class="font-body-lg text-body-lg text-on-surface-variant mt-6">
-            This folio reads your GitHub profile, contribution history, and every repository you can access — <strong class="text-on-surface">public and private</strong>. Nothing is fetched until you authorize this session.
+          <p class="font-body-lg text-body-lg text-on-surface-variant mt-6 max-w-xl">
+            Tell Logbook which GitHub account is yours. GitHub will ask you to confirm access, and the ledger appears only when the authorized account matches the handle entered here.
           </p>
 
-          <div class="mt-7 border-y border-outline-variant/50 grid grid-cols-2 sm:grid-cols-4 divide-x divide-outline-variant/40">
-            <div class="py-3 pr-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">Identity</div><div class="font-mono-data text-[12px] mt-1">profile · orgs</div></div>
-            <div class="py-3 px-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">Repositories</div><div class="font-mono-data text-[12px] mt-1">public + private</div></div>
-            <div class="py-3 px-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">Telemetry</div><div class="font-mono-data text-[12px] mt-1">commits · langs</div></div>
-            <div class="py-3 pl-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">Writes</div><div class="font-mono-data text-[12px] mt-1">none</div></div>
-          </div>
-
-          <div class="mt-7 flex flex-col sm:flex-row gap-2.5">
-            <button class="bg-primary text-surface hover:bg-secondary px-5 py-3 font-label-mono text-label-mono uppercase font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed" id="btn-authorize-github" type="button">
-              AUTHORIZE WITH GITHUB
-            </button>
-            <button class="border border-primary px-4 py-3 font-label-mono text-label-mono uppercase font-semibold hover:bg-primary hover:text-surface transition-colors" id="btn-auth-token" type="button">
-              USE ACCESS TOKEN
-            </button>
-            <button class="text-action px-2 py-3 font-label-mono text-label-mono uppercase text-on-surface-variant hover:text-on-surface underline decoration-1 underline-offset-4 transition-colors" id="btn-auth-public" type="button">
-              PUBLIC ONLY
-            </button>
-          </div>
-          <div class="font-label-mono text-[10px] text-on-surface-variant mt-3" id="auth-gate-status">AUTHORIZATION REQUIRED · NO DATA HAS BEEN REQUESTED</div>
-
-          <div class="hidden mt-6 border border-outline-variant/60 p-4 bg-surface-container-low" id="auth-token-panel">
-            <label class="block font-label-mono text-[10px] text-on-surface-variant uppercase mb-2" for="auth-token-input">
-              PERSONAL ACCESS TOKEN — REPO SCOPE
-            </label>
-            <input class="w-full bg-transparent border border-primary px-3 py-2 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="auth-token-input" placeholder="ghp_… or github_pat_…" type="password" autocomplete="off" spellcheck="false"/>
-            <div class="flex flex-wrap items-center gap-3 mt-2.5">
-              <button class="bg-primary text-surface hover:bg-secondary px-4 py-1.5 font-label-mono text-label-mono uppercase font-semibold transition-colors" id="btn-auth-token-apply" type="button">
-                AUTHORIZE TOKEN
+          <form class="mt-8 max-w-xl" id="github-consent-form" novalidate>
+            <label class="block font-label-mono text-[10px] uppercase tracking-widest text-on-surface-variant mb-2" for="auth-username-input">GitHub username</label>
+            <div class="flex flex-col sm:flex-row gap-2">
+              <div class="flex flex-1 items-center border border-outline-variant bg-surface-lowest focus-within:border-primary transition-colors">
+                <span class="pl-4 font-mono-data text-on-surface-variant" aria-hidden="true">@</span>
+                <input class="w-full min-w-0 bg-transparent px-2 py-3.5 font-mono-data text-body-md text-on-surface outline-none" id="auth-username-input" name="username" placeholder="your-github-handle" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="39" required/>
+              </div>
+              <button class="bg-primary text-surface hover:bg-secondary px-5 py-3.5 font-label-mono text-label-mono uppercase font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap" id="btn-authorize-github" type="submit">
+                CONTINUE WITH GITHUB ↗
               </button>
-              <a class="font-label-mono text-[10px] uppercase text-on-surface-variant hover:text-secondary underline decoration-1 underline-offset-4" href="https://github.com/settings/tokens/new?scopes=repo&amp;description=Logbook" target="_blank" rel="noopener">
-                Create a token ↗
-              </a>
             </div>
-            <p class="font-label-mono text-[10px] leading-relaxed text-on-surface-variant mt-2.5">
-              Held in <code class="text-on-surface">sessionStorage</code> for this tab only. For a token that never reaches JavaScript, use the OAuth bridge.
-            </p>
+            <div class="font-label-mono text-[10px] text-on-surface-variant mt-3 min-h-[1.25rem]" id="auth-gate-status" role="status" aria-live="polite">ENTER YOUR USERNAME TO CONTINUE</div>
+          </form>
+
+          <div class="mt-8 border-y border-outline-variant/50 grid grid-cols-3 divide-x divide-outline-variant/40 max-w-xl">
+            <div class="py-3 pr-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">01 · Identify</div><div class="font-body-sm text-body-sm mt-1">Enter your handle</div></div>
+            <div class="py-3 px-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">02 · Consent</div><div class="font-body-sm text-body-sm mt-1">Approve on GitHub</div></div>
+            <div class="py-3 pl-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">03 · Explore</div><div class="font-body-sm text-body-sm mt-1">View your ledger</div></div>
           </div>
         </div>
 
-        <aside class="border-t lg:border-t-0 lg:border-l border-outline-variant/50 pt-7 lg:pt-0 lg:pl-10">
-          <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">THE REQUEST</div>
-          <div class="mt-4 space-y-4 font-body-sm text-body-sm text-on-surface-variant">
-            <p>Logbook asks GitHub for access to your private repositories. The bridge only issues read-only API requests; the token stays on the server and is never written into this page.</p>
-            <p>OAuth scopes: <span class="font-mono-data text-on-surface" id="auth-scope-text">repo · read:org · read:user · user:email · gist</span></p>
+        <aside class="border border-outline-variant/60 bg-surface-low/60 p-6 md:p-8 self-center">
+          <div class="flex items-center justify-between gap-3 pb-4 border-b border-outline-variant/50">
+            <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">WHAT YOU APPROVE</div>
+            <span class="font-label-mono text-[9px] uppercase border border-outline-variant/70 px-1.5 py-0.5">SESSION ONLY</span>
           </div>
-
-          <div class="mt-6 border-t border-outline-variant/50 pt-4" id="auth-local-card">
-            <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">LOCAL GITHUB CLI</div>
-            <div class="mt-2 font-mono-data text-body-sm text-on-surface" id="auth-local-login">Checking…</div>
-            <div class="mt-1 font-label-mono text-[10px] text-on-surface-variant" id="auth-local-scopes"></div>
-            <button class="hidden mt-2.5 border border-outline-variant/70 hover:border-secondary hover:text-secondary px-3 py-1.5 font-label-mono text-[10px] uppercase transition-colors" id="btn-auth-local" type="button">
-              AUTHORIZE WITH LOCAL CLI
-            </button>
+          <div class="mt-5 space-y-4 font-body-sm text-body-sm text-on-surface-variant">
+            <p>GitHub handles the sign-in and consent screen. Logbook never asks for your password and keeps the access token on the server.</p>
+            <p>The server uses the authorized session to read your profile and build the dashboard. The browser never receives your GitHub token.</p>
           </div>
-
-          <div class="mt-6 border-t border-outline-variant/50 pt-4">
-            <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">WHAT PRIVATE ACCESS ADDS</div>
+          <div class="mt-6 border-t border-outline-variant/50 pt-5">
+            <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">THE LEDGER INCLUDES</div>
             <ul class="mt-3 space-y-2 font-body-sm text-body-sm text-on-surface-variant">
-              <li class="flex gap-2"><span class="text-secondary">§</span><span>Private repository ledger, languages, and push log.</span></li>
-              <li class="flex gap-2"><span class="text-secondary">§</span><span>Commit, issue, pull request, and review telemetry.</span></li>
-              <li class="flex gap-2"><span class="text-secondary">§</span><span>Organizations, starred repositories, gists, and followers.</span></li>
-              <li class="flex gap-2"><span class="text-secondary">§</span><span>File trees and source inspection for private repositories.</span></li>
+              <li class="flex gap-2"><span class="text-secondary">01</span><span>Profile, organizations, followers, and starred work.</span></li>
+              <li class="flex gap-2"><span class="text-secondary">02</span><span>Public and accessible private repositories.</span></li>
+              <li class="flex gap-2"><span class="text-secondary">03</span><span>Commit rhythm, languages, issues, and pull requests.</span></li>
             </ul>
           </div>
-
           <div class="mt-6 border-t border-outline-variant/50 pt-4 font-label-mono text-[10px] leading-relaxed text-on-surface-variant" id="auth-setup-note">
-            Bridge offline? Run <code class="text-on-surface">npm start</code> with OAuth credentials, or authorize with a repo-scoped token.
+            Secure GitHub OAuth is required. No account data is requested before consent.
           </div>
         </aside>
       </div>
 
       <div class="border-t border-outline-variant/50 mt-8 pt-3 flex flex-wrap items-center justify-between gap-2 font-label-mono text-[9px] uppercase text-on-surface-variant">
-        <span>LOGBOOK 4.13 · AUTHORIZATION GATE</span>
-        <span>GITHUB.COM · READ-ONLY REQUESTS · SESSION ONLY</span>
+        <span>LOGBOOK 4.13 · PERSONAL TELEMETRY FOLIO</span>
+        <span>GITHUB OAUTH · TOKEN KEPT SERVER-SIDE</span>
       </div>
     </div>
   </div>
@@ -323,77 +319,70 @@
        STICKY HEADER
        ========================================================================= -->
   <header class="sticky top-0 z-50 w-full bg-surface border-b border-outline-variant/50 transition-colors">
-    <div class="h-14 max-w-[1360px] mx-auto px-margin md:px-margin-desktop flex items-center justify-between gap-2">
-      <!-- Left: Brand + Profile Handle + Section Navigation -->
-      <div class="flex items-center space-x-lg min-w-0">
-        <div class="flex items-center space-x-md">
-          <a href="#section-now" class="font-headline-md text-headline-md font-normal tracking-tight text-on-surface hover:text-secondary transition-colors flex items-center gap-2" id="brand-logo">
+    <div class="max-w-[1360px] mx-auto px-margin md:px-margin-desktop">
+      <!-- Primary row: identity and utilities -->
+      <div class="h-14 flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3 sm:gap-4 min-w-0">
+          <a href="#section-now" class="font-headline-md text-headline-md font-normal tracking-tight text-on-surface hover:text-secondary transition-colors flex items-center gap-2 shrink-0" id="brand-logo">
             <span>Logbook</span>
             <span class="hidden sm:inline-block font-label-mono text-[9px] uppercase tracking-widest px-1 py-0.5 border border-outline-variant/60 text-on-surface-variant">v4.13</span>
           </a>
-          <div class="h-4 w-px bg-outline-variant/60"></div>
-          <!-- Interactive Handle Switcher Trigger -->
-          <button class="flex items-center space-x-sm group px-1.5 py-1 -mx-1.5 hover:bg-surface-container transition-colors border border-transparent hover:border-outline-variant/60" id="btn-profile-switcher" title="Switch GitHub Handle or Fetch Live GitHub User" type="button">
-            <div class="w-6 h-6 bg-primary flex items-center justify-center shrink-0 group-hover:bg-secondary transition-colors">
+          <div class="h-5 w-px bg-outline-variant/60 shrink-0"></div>
+          <button class="flex items-center gap-2 group px-1.5 py-1 -mx-1.5 min-w-0 hover:bg-surface-container transition-colors border border-transparent hover:border-outline-variant/60" id="btn-profile-switcher" title="Switch GitHub Handle or Fetch Live GitHub User" type="button">
+            <div class="w-7 h-7 bg-primary flex items-center justify-center shrink-0 group-hover:bg-secondary transition-colors">
               <span class="material-symbols-outlined text-surface text-[15px]" id="header-avatar-icon">person</span>
             </div>
-            <span class="font-label-mono text-label-mono text-on-surface font-medium lowercase group-hover:text-secondary transition-colors" id="header-handle">@handle</span>
+            <span class="hidden sm:block truncate font-label-mono text-label-mono text-on-surface font-medium lowercase group-hover:text-secondary transition-colors" id="header-handle">@handle</span>
             <span class="hidden font-label-mono text-[8px] uppercase tracking-widest px-1 py-0.5 border border-secondary text-secondary" id="header-auth-badge" title="Authenticated session — private repositories included">private</span>
-            <span class="font-label-mono text-[9px] text-on-surface-variant">▾</span>
+            <span class="hidden sm:inline font-label-mono text-[9px] text-on-surface-variant">▾</span>
           </button>
         </div>
 
-        <nav class="hidden xl:flex items-center space-x-md pl-md border-l border-outline-variant/40" id="main-nav">
-          <a aria-current="page" class="nav-link font-label-mono text-label-mono uppercase transition-colors text-secondary underline decoration-1 underline-offset-4" data-target="section-now" href="#section-now">Overview</a>
-          <a class="nav-link font-label-mono text-label-mono uppercase text-on-surface-variant hover:text-on-surface transition-colors" data-target="section-pulse" href="#section-pulse">Pulse</a>
-          <a class="nav-link font-label-mono text-label-mono uppercase text-on-surface-variant hover:text-on-surface transition-colors" data-target="section-rhythm" href="#section-rhythm">Matrix</a>
-          <a class="nav-link font-label-mono text-label-mono uppercase text-on-surface-variant hover:text-on-surface transition-colors" data-target="section-repositories" href="#section-repositories">Repos</a>
-          <a class="nav-link font-label-mono text-label-mono uppercase text-on-surface-variant hover:text-on-surface transition-colors" data-target="section-languages" href="#section-languages">Syntax</a>
-          <a class="nav-link font-label-mono text-label-mono uppercase text-on-surface-variant hover:text-on-surface transition-colors" data-target="section-push-log" href="#section-push-log">Ledger</a>
-        </nav>
+        <div class="flex items-center gap-2 shrink-0">
+          <button class="hidden md:flex items-center gap-1.5 whitespace-nowrap text-on-surface-variant hover:text-on-surface font-label-mono text-[10px] px-2.5 h-8 border border-transparent hover:border-outline-variant/50 transition-colors" id="btn-sync" title="Click to re-sync GitHub telemetry" type="button">
+            <span class="material-symbols-outlined text-[14px] text-on-surface-variant transition-transform duration-500" id="sync-icon">refresh</span>
+            <span id="sync-label">Synced 2m ago</span>
+          </button>
+          <div class="hidden md:block h-5 w-px bg-outline-variant/50"></div>
+          <button aria-label="Search and Command Palette" class="flex items-center gap-1 h-8 px-2.5 border border-outline-variant/60 hover:border-primary hover:bg-surface-container text-on-surface transition-colors" id="btn-cmd-palette" type="button">
+            <span class="material-symbols-outlined text-[14px]">search</span>
+            <span class="hidden sm:inline font-label-mono text-label-mono">⌘K</span>
+          </button>
+          <button aria-label="Toggle Mechanical Audio Feedback" class="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:border-primary hover:bg-surface-container transition-colors border border-outline-variant/60" id="btn-sound-toggle" title="Tactile Sound: ON (Click to mute)" type="button">
+            <span class="material-symbols-outlined text-[15px]" id="sound-icon">volume_up</span>
+          </button>
+          <button aria-label="Toggle Theme" class="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:border-primary hover:bg-surface-container transition-colors border border-outline-variant/60" id="btn-theme-toggle" title="Toggle Rag Paper / Carbon Night Folio" type="button">
+            <span class="material-symbols-outlined text-[16px]" id="theme-icon">light_mode</span>
+          </button>
+          <button aria-label="Keyboard Shortcuts" class="w-8 h-8 hidden sm:flex items-center justify-center font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:border-primary hover:bg-surface-container transition-colors border border-outline-variant/60" id="btn-shortcuts" title="Keyboard Shortcuts (?)" type="button">?</button>
+        </div>
       </div>
 
-      <!-- Right: Global Range Selector, Sync, Sound, Search ⌘K, Theme, Shortcuts -->
-      <div class="flex items-center space-x-2 sm:space-x-3">
-        <!-- Global Range Selector -->
-        <div class="hidden lg:flex items-stretch border border-outline-variant/60" id="range-selector" role="group" aria-label="Timeframe range">
-          <button class="range-btn px-space-sm py-1 font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors" data-range="7D" type="button">7D</button>
-          <div class="w-px bg-outline-variant/40"></div>
-          <button class="range-btn px-space-sm py-1 font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors" data-range="30D" type="button">30D</button>
-          <div class="w-px bg-outline-variant/40"></div>
-          <button class="range-btn px-space-sm py-1 font-label-mono text-label-mono bg-primary text-surface font-semibold transition-colors" data-range="90D" type="button">90D</button>
-          <div class="w-px bg-outline-variant/40"></div>
-          <button class="range-btn px-space-sm py-1 font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors" data-range="1Y" type="button">1Y</button>
-          <div class="w-px bg-outline-variant/40"></div>
-          <button class="range-btn px-space-sm py-1 font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors" data-range="ALL" type="button">ALL</button>
+      <!-- Secondary row: page navigation and global timeframe -->
+      <div class="hidden lg:flex h-10 items-center justify-between gap-6 border-t border-outline-variant/30">
+        <nav class="flex h-full items-center gap-6" id="main-nav" aria-label="Page sections">
+          <a aria-current="page" class="nav-link h-full flex items-center font-label-mono text-[10px] tracking-wider uppercase transition-colors text-secondary border-b-2 border-secondary" data-target="section-now" href="#section-now">Overview</a>
+          <a class="nav-link h-full flex items-center font-label-mono text-[10px] tracking-wider uppercase text-on-surface-variant hover:text-on-surface transition-colors border-b-2 border-transparent" data-target="section-pulse" href="#section-pulse">Pulse</a>
+          <a class="nav-link h-full flex items-center font-label-mono text-[10px] tracking-wider uppercase text-on-surface-variant hover:text-on-surface transition-colors border-b-2 border-transparent" data-target="section-rhythm" href="#section-rhythm">Matrix</a>
+          <a class="nav-link h-full flex items-center font-label-mono text-[10px] tracking-wider uppercase text-on-surface-variant hover:text-on-surface transition-colors border-b-2 border-transparent" data-target="section-repositories" href="#section-repositories">Repos</a>
+          <a class="nav-link h-full flex items-center font-label-mono text-[10px] tracking-wider uppercase text-on-surface-variant hover:text-on-surface transition-colors border-b-2 border-transparent" data-target="section-languages" href="#section-languages">Syntax</a>
+          <a class="nav-link h-full flex items-center font-label-mono text-[10px] tracking-wider uppercase text-on-surface-variant hover:text-on-surface transition-colors border-b-2 border-transparent" data-target="section-push-log" href="#section-push-log">Ledger</a>
+        </nav>
+
+        <div class="flex items-center gap-3 shrink-0">
+          <span class="font-label-mono text-[9px] uppercase tracking-widest text-on-surface-variant">Range</span>
+          <div class="flex items-stretch border border-outline-variant/60" id="range-selector" role="group" aria-label="Timeframe range">
+            <button class="range-btn px-3 py-1 font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors" data-range="7D" type="button">7D</button>
+            <div class="w-px bg-outline-variant/40"></div>
+            <button class="range-btn px-3 py-1 font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors" data-range="30D" type="button">30D</button>
+            <div class="w-px bg-outline-variant/40"></div>
+            <button class="range-btn px-3 py-1 font-label-mono text-label-mono bg-primary text-surface font-semibold transition-colors" data-range="90D" type="button">90D</button>
+            <div class="w-px bg-outline-variant/40"></div>
+            <button class="range-btn px-3 py-1 font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors" data-range="1Y" type="button">1Y</button>
+            <div class="w-px bg-outline-variant/40"></div>
+            <button class="range-btn px-3 py-1 font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors" data-range="ALL" type="button">ALL</button>
+          </div>
         </div>
-
-        <!-- Live Sync Trigger -->
-        <button class="hidden sm:flex items-center space-x-1 text-on-surface-variant hover:text-on-surface font-label-mono text-label-mono px-2 py-1 border border-transparent hover:border-outline-variant/50 transition-colors" id="btn-sync" title="Click to re-sync GitHub telemetry" type="button">
-          <span class="material-symbols-outlined text-[14px] text-on-surface-variant transition-transform duration-500" id="sync-icon">refresh</span>
-          <span id="sync-label">Synced 2m ago</span>
-        </button>
-
-        <!-- Command Palette Search Trigger -->
-        <button aria-label="Search and Command Palette" class="flex items-center space-x-xs px-2 py-1 border border-outline-variant/60 hover:border-primary hover:bg-surface-container text-on-surface transition-colors" id="btn-cmd-palette" type="button">
-          <span class="material-symbols-outlined text-[14px]">search</span>
-          <span class="font-label-mono text-label-mono px-1">⌘K</span>
-        </button>
-
-        <!-- Tactile Sound Toggle -->
-        <button aria-label="Toggle Mechanical Audio Feedback" class="w-7 h-7 flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:border-primary transition-colors border border-outline-variant/60" id="btn-sound-toggle" title="Tactile Sound: ON (Click to mute)" type="button">
-          <span class="material-symbols-outlined text-[15px]" id="sound-icon">volume_up</span>
-        </button>
-
-        <!-- Theme Toggle -->
-        <button aria-label="Toggle Theme" class="w-7 h-7 flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:border-primary transition-colors border border-outline-variant/60" id="btn-theme-toggle" title="Toggle Rag Paper / Carbon Night Folio" type="button">
-          <span class="material-symbols-outlined text-[16px]" id="theme-icon">light_mode</span>
-        </button>
-
-        <!-- Keyboard Shortcuts Help Button -->
-        <button aria-label="Keyboard Shortcuts" class="w-7 h-7 hidden sm:flex items-center justify-center font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:border-primary transition-colors border border-outline-variant/60" id="btn-shortcuts" title="Keyboard Shortcuts (?)" type="button">
-          ?
-        </button>
       </div>
     </div>
 
@@ -828,16 +817,6 @@
         <!-- Heatmap Canvas container -->
         <div class="w-full overflow-x-auto pb-4 relative">
           <div class="min-w-[1020px] select-none pt-6 pb-8">
-            <!-- Editorial annotations floating overlay -->
-            <div class="relative w-full mb-1">
-              <div class="absolute left-[720px] -top-5 flex items-center space-x-2 pointer-events-none" id="heatmap-peak-callout">
-                <span class="font-headline-md italic text-body-sm text-on-surface" id="heatmap-peak-text">Busiest day — 31 commits, 14 Aug</span>
-                <svg class="w-6 h-4 text-on-surface" fill="none" viewBox="0 0 24 16">
-                  <path d="M0,8 L18,8 L18,16" stroke="currentColor" stroke-width="1"></path>
-                </svg>
-              </div>
-            </div>
-
             <!-- Heatmap Grid structure: Weekdays column + 53 weeks -->
             <div class="flex items-start">
               <!-- Weekday labels -->
@@ -848,6 +827,14 @@
               </div>
               <!-- Main Matrix area -->
               <div class="flex-1 relative">
+                <!-- Editorial peak annotation, positioned from the live grid geometry -->
+                <div class="heatmap-peak-callout flex items-center space-x-2" id="heatmap-peak-callout">
+                  <span class="font-headline-md italic text-body-sm text-on-surface" id="heatmap-peak-text">Busiest day — 31 commits, 14 Aug</span>
+                  <svg class="w-6 h-4 text-on-surface shrink-0" fill="none" viewBox="0 0 24 16" aria-hidden="true">
+                    <path d="M0,8 L18,8 L18,16" stroke="currentColor" stroke-width="1"></path>
+                  </svg>
+                </div>
+
                 <!-- Month labels row -->
                 <div class="grid grid-cols-12 text-left font-label-mono text-[10px] text-on-surface-variant mb-2">
                   <span>Nov</span><span>Dec</span><span>Jan</span><span>Feb</span><span>Mar</span><span>Apr</span>
@@ -866,9 +853,9 @@
                 </div>
 
                 <!-- Streak bracket beneath cols 24-29 -->
-                <div class="absolute -bottom-7 left-[528px] w-[130px] flex flex-col items-center pointer-events-none transition-all duration-300" id="heatmap-streak-bracket">
+                <div class="heatmap-streak-bracket flex flex-col items-center" id="heatmap-streak-bracket">
                   <div class="w-full h-1 border-b border-l border-r border-on-surface" id="streak-bracket-line"></div>
-                  <span class="font-headline-md italic text-[11px] text-on-surface mt-1" id="heatmap-streak-text">Longest streak — 41 days</span>
+                  <span class="heatmap-streak-label font-headline-md italic text-[11px] text-on-surface" id="heatmap-streak-text">Longest streak — 41 days</span>
                 </div>
               </div>
             </div>
@@ -1643,6 +1630,7 @@
 
   var TOKEN_STORAGE_KEY = "logbook:token";
   var PUBLIC_ONLY_KEY = "logbook:publicOnly";
+  var REQUESTED_USER_KEY = "logbook:requestedGithubUser";
 
   function safeHttpUrl(value) {
     if (!value) return "";
@@ -1685,7 +1673,9 @@
       invalid_state: "THE OAUTH HANDSHAKE EXPIRED · TRY AGAIN",
       oauth_failed: "THE OAUTH HANDSHAKE FAILED · TRY AGAIN",
       token_exchange_failed: "GITHUB REJECTED THE OAUTH EXCHANGE · CHECK THE CLIENT SECRET",
-      bad_verification_code: "THE OAUTH CODE EXPIRED · TRY AGAIN"
+      bad_verification_code: "THE OAUTH CODE EXPIRED · TRY AGAIN",
+      invalid_username: "ENTER A VALID GITHUB USERNAME",
+      account_mismatch: "THAT GITHUB SESSION DOES NOT MATCH THE USERNAME ENTERED · SIGN IN WITH THE CORRECT ACCOUNT"
     };
     return messages[code] || ("AUTHORIZATION FAILED · " + String(code || "UNKNOWN").toUpperCase());
   }
@@ -1704,7 +1694,7 @@
   }
 
   function setAuthGateBusy(busy, message) {
-    ["btn-authorize-github", "btn-auth-token-apply", "btn-auth-public", "btn-auth-local"].forEach(function (id) {
+    ["btn-authorize-github", "auth-username-input"].forEach(function (id) {
       var b = document.getElementById(id);
       if (b) b.disabled = !!busy;
     });
@@ -1725,63 +1715,40 @@
     setAuthGateBusy(false);
 
     var canOauth = !!(probe && probe.oauthConfigured);
-    var localLogin = probe && (probe.localLogin || probe.login);
-    var canLocal = !!(probe && (probe.localAvailable || probe.authorized));
     var online = !!probe;
 
-    setText("auth-bridge-status", online ? "BRIDGE ONLINE · CONSENT REQUIRED" : "BRIDGE OFFLINE · STATIC MODE");
-    if (probe && probe.oauthScopes) {
-      setText("auth-scope-text", String(probe.oauthScopes).split(/\s+/).filter(Boolean).join(" · "));
-    }
+    setText("auth-bridge-status", canOauth ? "SECURE OAUTH READY" : (online ? "OAUTH SETUP REQUIRED" : "SECURE CONNECTION OFFLINE"));
 
     var primary = document.getElementById("btn-authorize-github");
     if (primary) {
       primary.disabled = false;
       if (canOauth) {
-        primary.textContent = "AUTHORIZE WITH GITHUB";
+        primary.textContent = "CONTINUE WITH GITHUB ↗";
         primary.dataset.authAction = "oauth";
-      } else if (canLocal) {
-        primary.textContent = "AUTHORIZE @" + String(localLogin || "GITHUB CLI").toUpperCase();
-        primary.dataset.authAction = "local";
       } else {
-        primary.textContent = "AUTHORIZATION BRIDGE OFFLINE";
+        primary.textContent = "GITHUB OAUTH UNAVAILABLE";
         primary.dataset.authAction = "offline";
         primary.disabled = true;
       }
     }
 
-    setText("auth-local-login", canLocal
-      ? "@" + localLogin
-      : (online ? "No active GitHub CLI session" : "Bridge not running"));
-    setText("auth-local-scopes", canLocal && probe.localScopes
-      ? "SCOPES · " + probe.localScopes
-      : (canLocal ? "ACTIVE SERVER SESSION · RE-AUTHORIZE TO KEEP IT" : (online ? "RUN gh auth login TO ENABLE THE LOCAL FALLBACK" : "START THE NODE BRIDGE TO ENABLE OAUTH")));
-
-    var localBtn = document.getElementById("btn-auth-local");
-    if (localBtn) {
-      localBtn.classList.toggle("hidden", !(canLocal && canOauth));
-      localBtn.textContent = "AUTHORIZE @" + String(localLogin || "GITHUB CLI").toUpperCase();
-    }
-
     var note = document.getElementById("auth-setup-note");
     if (note) {
       if (canOauth) {
-        note.innerHTML = "OAuth app connected. The callback is locked to <code class=\"text-on-surface\">" + escapeHtml(probe.callbackUrl || "the configured URL") + "</code>. Tokens stay on the bridge.";
-      } else if (canLocal) {
-        note.innerHTML = "Clicking authorize adopts the existing <code class=\"text-on-surface\">gh</code> token for this browser session. The token stays on the server and is never written into the page.";
+        note.textContent = "Secure GitHub OAuth is ready. No account data is requested before consent.";
       } else {
-        note.innerHTML = "Private access is unavailable here. Use a repo-scoped token, or run <code class=\"text-on-surface\">npm start</code> with <code class=\"text-on-surface\">GITHUB_CLIENT_ID</code> and <code class=\"text-on-surface\">GITHUB_CLIENT_SECRET</code>.";
+        note.innerHTML = "OAuth is not configured. Add <code class=\"text-on-surface\">GITHUB_CLIENT_ID</code>, <code class=\"text-on-surface\">GITHUB_CLIENT_SECRET</code>, and the callback URL on the server.";
       }
     }
 
-    var panel = document.getElementById("auth-token-panel");
-    if (panel) panel.classList.add("hidden");
-    var tokenInput = document.getElementById("auth-token-input");
-    if (tokenInput) tokenInput.value = "";
+    var usernameInput = document.getElementById("auth-username-input");
+    if (usernameInput && !usernameInput.value) {
+      try { usernameInput.value = sessionStorage.getItem(REQUESTED_USER_KEY) || ""; } catch (e) {}
+    }
 
     var status = document.getElementById("auth-gate-status");
     if (status) {
-      status.textContent = message || "AUTHORIZATION REQUIRED · NO DATA HAS BEEN REQUESTED";
+      status.textContent = message || "ENTER YOUR USERNAME TO CONTINUE";
       status.className = "font-label-mono text-[10px] mt-3 " + (message ? "text-secondary" : "text-on-surface-variant");
     }
   }
@@ -1832,42 +1799,9 @@
 
   async function bootAuth() {
     var authErr = authErrorFromUrl();
-    try { state.token = sessionStorage.getItem(TOKEN_STORAGE_KEY) || ""; } catch (e) {}
-
-    var publicOnly = false;
-    try { publicOnly = sessionStorage.getItem(PUBLIC_ONLY_KEY) === "1"; } catch (e) {}
-
-    if (publicOnly) {
-      // Public-only means the server-side private session is intentionally
-      // discarded. Keep the consent options ready for a later re-authorization.
-      try {
-        await fetch(AUTH_API + "/logout", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "X-Logbook-Auth": "1", "Accept": "application/json" }
-        });
-      } catch (e) {}
-      state.authProbe = await probeAuthBridge();
-      state.mode = "public";
-      state.auth = null;
-      clearStoredToken();
-      hideAuthGate();
-      await reloadAccount(DEFAULT_USER, true);
-      return;
-    }
 
     var probe = await probeAuthBridge();
     state.authProbe = probe;
-
-    // No bridge and no stored token means there is nothing to authorize:
-    // this is the static build, so open the public ledger immediately.
-    if (!probe && !state.token) {
-      state.mode = "public";
-      state.auth = null;
-      hideAuthGate();
-      await reloadAccount(DEFAULT_USER, true);
-      return;
-    }
 
     if (probe && probe.authorized) {
       state.auth = probe;
@@ -1877,16 +1811,6 @@
       hideAuthGate();
       await reloadAccount(probe.login, true);
       return;
-    }
-
-    if (state.token) {
-      var ok = await verifyTokenSession(state.token, { silent: true });
-      if (ok) {
-        hideAuthGate();
-        await reloadAccount(state.auth.login, true);
-        return;
-      }
-      clearStoredToken();
     }
 
     state.mode = "public";
@@ -1899,14 +1823,23 @@
     var btn = document.getElementById("btn-authorize-github");
     var action = btn ? btn.dataset.authAction : "offline";
     if (action === "oauth") {
+      var input = document.getElementById("auth-username-input");
+      var username = String((input && input.value) || "").trim().replace(/^@/, "");
+      if (!/^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i.test(username)) {
+        setAuthGateBusy(false, "ENTER A VALID GITHUB USERNAME");
+        if (input) input.focus();
+        return;
+      }
       clearStoredToken();
-      try { sessionStorage.removeItem(PUBLIC_ONLY_KEY); } catch (e) {}
-      setAuthGateBusy(true, "REDIRECTING TO GITHUB…");
-      window.location.assign("/auth/github");
+      try {
+        sessionStorage.removeItem(PUBLIC_ONLY_KEY);
+        sessionStorage.setItem(REQUESTED_USER_KEY, username);
+      } catch (e) {}
+      setAuthGateBusy(true, "OPENING GITHUB CONSENT FOR @" + username.toUpperCase() + "…");
+      window.location.assign("/auth/github?username=" + encodeURIComponent(username));
       return;
     }
-    if (action === "local") return authorizeLocalSession();
-    setAuthGateBusy(false, "BRIDGE OFFLINE · START npm start OR USE A TOKEN");
+    setAuthGateBusy(false, "GITHUB OAUTH IS NOT CONFIGURED ON THIS SERVER");
   }
 
   async function authorizeLocalSession() {
@@ -2464,8 +2397,8 @@
     var totalCommitsYear = activeDates.reduce(function (s, a) { return s + a.count; }, 0);
     var daysInYear = Math.floor((dec31 - jan1) / 86400000) + 1;
 
-    var streakLeft = bestStart ? Math.floor(Math.floor((bestStart - start) / 86400000) / 7) * 22 : 0;
-    var streakWidth = best ? Math.max(60, Math.floor(best / 7) * 22) : 0;
+    var streakStartCol = bestStart ? Math.floor(Math.floor((bestStart - start) / 86400000) / 7) : 0;
+    var streakEndCol = bestEnd ? Math.floor(Math.floor((bestEnd - start) / 86400000) / 7) : streakStartCol;
 
     return {
       matrix: matrix, rawMatrix: rawMatrix, start: start, weeks: weeks,
@@ -2477,9 +2410,7 @@
         : "No commits recorded in " + year,
       peakCol: peak.col, peakRow: peak.row,
       streakText: best > 0 ? "Longest streak — " + best + (best === 1 ? " day" : " days") : "No streaks in " + year,
-      streakStartCol: 0, streakEndCol: 0,
-      streakLeftPx: streakLeft + "px",
-      streakWidthPx: streakWidth,
+      streakStartCol: streakStartCol, streakEndCol: streakEndCol,
       currentStreak: cur,
       longestStreak: best
     };
@@ -3096,8 +3027,8 @@
 
     document.querySelectorAll(".range-btn").forEach(function (btn) {
       btn.className = btn.getAttribute("data-range") === rangeKey
-        ? "range-btn px-space-sm py-1 font-label-mono text-label-mono bg-primary text-surface font-semibold transition-colors"
-        : "range-btn px-space-sm py-1 font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors";
+        ? "range-btn px-3 py-1 font-label-mono text-label-mono bg-primary text-surface font-semibold transition-colors"
+        : "range-btn px-3 py-1 font-label-mono text-label-mono text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors";
     });
 
     setText("pulse-subtitle", d.subtitle);
@@ -3204,6 +3135,36 @@
   // ---- Heatmap
   var LEVEL_BG = ["bg-[var(--hm-0)]", "bg-[var(--hm-1)]", "bg-[var(--hm-2)]", "bg-[var(--hm-3)]", "bg-[var(--hm-4)]"];
 
+  function positionHeatmapAnnotations(y) {
+    var cellPitch = 22;
+    var cellSize = 18;
+    var gridWidth = y.weeks * cellSize + Math.max(0, y.weeks - 1) * (cellPitch - cellSize);
+    var bracket = document.getElementById("heatmap-streak-bracket");
+    var label = document.getElementById("heatmap-streak-text");
+    var callout = document.getElementById("heatmap-peak-callout");
+
+    if (bracket) {
+      var bracketLeft = y.streakStartCol * cellPitch;
+      var bracketRight = y.streakEndCol * cellPitch + cellSize;
+      bracket.style.display = y.longestStreak > 0 ? "" : "none";
+      bracket.style.left = bracketLeft + "px";
+      bracket.style.width = Math.max(cellSize, bracketRight - bracketLeft) + "px";
+
+      if (label) {
+        var labelWidth = label.getBoundingClientRect().width;
+        var streakCenter = ((y.streakStartCol + y.streakEndCol) * cellPitch + cellSize) / 2;
+        var labelLeft = Math.max(0, Math.min(gridWidth - labelWidth, streakCenter - labelWidth / 2));
+        label.style.left = (labelLeft - bracketLeft) + "px";
+      }
+    }
+
+    if (callout) {
+      var calloutWidth = callout.getBoundingClientRect().width;
+      var peakX = (y.peakCol || 0) * cellPitch + cellSize / 2;
+      callout.style.left = Math.max(0, Math.min(gridWidth - calloutWidth, peakX - calloutWidth + 20)) + "px";
+    }
+  }
+
   function renderHeatmap(yearKey) {
     var y = HEATMAP_YEARS[yearKey];
     if (!y) return;
@@ -3223,15 +3184,6 @@
     setText("hm-stat-weekday", y.weekday);
     setText("heatmap-peak-text", y.peakText);
     setText("heatmap-streak-text", y.streakText);
-
-    var bracket = document.getElementById("heatmap-streak-bracket");
-    if (bracket) {
-      bracket.style.left = y.streakLeftPx;
-      bracket.style.width = (y.streakWidthPx || 60) + "px";
-    }
-
-    var callout = document.getElementById("heatmap-peak-callout");
-    if (callout) callout.style.left = Math.max(0, Math.min(880, (y.peakCol || 0) * 22 - 40)) + "px";
 
     var html = "";
     y.matrix.forEach(function (col, cIdx) {
@@ -3254,6 +3206,12 @@
       html += '</div>';
     });
     grid.innerHTML = html;
+    positionHeatmapAnnotations(y);
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(function () {
+        if (state.currentYear === yearKey) positionHeatmapAnnotations(y);
+      });
+    }
 
     var tip = document.getElementById("heatmap-floating-tooltip");
     grid.querySelectorAll(".hm-cell").forEach(function (cell) {
@@ -4336,22 +4294,10 @@
     document.getElementById("btn-sign-out").addEventListener("click", function () { signOut(); });
 
     // Authorization gate controls
-    document.getElementById("btn-authorize-github").addEventListener("click", function () { authorizePrimary(); });
-    document.getElementById("btn-auth-token").addEventListener("click", function () {
-      var panel = document.getElementById("auth-token-panel");
-      if (!panel) return;
-      var isHidden = panel.classList.toggle("hidden");
-      if (!isHidden) {
-        var field = document.getElementById("auth-token-input");
-        if (field) setTimeout(function () { field.focus(); }, 20);
-      }
+    document.getElementById("github-consent-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      authorizePrimary();
     });
-    document.getElementById("btn-auth-token-apply").addEventListener("click", function () { applyTokenFromGate(); });
-    document.getElementById("btn-auth-local").addEventListener("click", function () { authorizeLocalSession(); });
-    document.getElementById("auth-token-input").addEventListener("keydown", function (e) {
-      if (e.key === "Enter") { e.preventDefault(); applyTokenFromGate(); }
-    });
-    document.getElementById("btn-auth-public").addEventListener("click", function () { authorizePublicMode(); });
 
     document.getElementById("btn-shortcuts").addEventListener("click", function () { openModal("shortcuts-modal"); });
     document.getElementById("btn-close-shortcuts").addEventListener("click", closeAllModals);
@@ -4405,9 +4351,12 @@
         if (el && el.getBoundingClientRect().top <= 140) current = id;
       });
       document.querySelectorAll("#main-nav .nav-link").forEach(function (link) {
-        link.className = link.getAttribute("data-target") === current
-          ? "nav-link font-label-mono text-label-mono uppercase transition-colors text-secondary underline decoration-1 underline-offset-4"
-          : "nav-link font-label-mono text-label-mono uppercase text-on-surface-variant hover:text-on-surface transition-colors";
+        var active = link.getAttribute("data-target") === current;
+        link.className = active
+          ? "nav-link h-full flex items-center font-label-mono text-[10px] tracking-wider uppercase transition-colors text-secondary border-b-2 border-secondary"
+          : "nav-link h-full flex items-center font-label-mono text-[10px] tracking-wider uppercase text-on-surface-variant hover:text-on-surface transition-colors border-b-2 border-transparent";
+        if (active) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
       });
     }, { passive: true });
 
