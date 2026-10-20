@@ -210,6 +210,110 @@
   </style>
 </head>
 <body class="bg-surface text-on-surface selection:bg-primary selection:text-surface antialiased min-h-screen flex flex-col paper-grain">
+  <!-- =========================================================================
+       00. GITHUB AUTHORIZATION GATE — shown before any GitHub data is fetched
+       ========================================================================= -->
+  <div class="fixed inset-0 z-[200] bg-surface text-on-surface overflow-y-auto" id="auth-gate">
+    <div class="min-h-full w-full max-w-[1360px] mx-auto px-margin md:px-margin-desktop py-6 md:py-10 flex flex-col">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-outline-variant/60 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="w-2 h-2 bg-secondary"></span>
+          <span class="font-label-mono-bold uppercase tracking-widest">LOGBOOK / GITHUB AUTHORIZATION</span>
+          <span class="font-label-mono text-[9px] text-on-surface-variant border border-outline-variant/60 px-1.5 py-0.5">READ ONLY</span>
+        </div>
+        <span class="font-label-mono text-[10px] uppercase text-on-surface-variant" id="auth-bridge-status">CHECKING AUTHORIZATION BRIDGE…</span>
+      </div>
+
+      <div class="grid lg:grid-cols-[1.45fr_1fr] gap-8 lg:gap-16 pt-8 md:pt-14 flex-1">
+        <div class="max-w-2xl">
+          <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-secondary mb-4">ACCESS REQUEST · EXPLICIT CONSENT</div>
+          <h1 class="font-headline-xl text-[2.7rem] sm:text-[3.6rem] lg:text-[4.4rem] leading-[0.94] tracking-tight">
+            Private ledgers<br/>
+            open only after<br/>
+            <em class="text-secondary">you allow it.</em>
+          </h1>
+          <p class="font-body-lg text-body-lg text-on-surface-variant mt-6">
+            This folio reads your GitHub profile, contribution history, and every repository you can access — <strong class="text-on-surface">public and private</strong>. Nothing is fetched until you authorize this session.
+          </p>
+
+          <div class="mt-7 border-y border-outline-variant/50 grid grid-cols-2 sm:grid-cols-4 divide-x divide-outline-variant/40">
+            <div class="py-3 pr-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">Identity</div><div class="font-mono-data text-[12px] mt-1">profile · orgs</div></div>
+            <div class="py-3 px-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">Repositories</div><div class="font-mono-data text-[12px] mt-1">public + private</div></div>
+            <div class="py-3 px-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">Telemetry</div><div class="font-mono-data text-[12px] mt-1">commits · langs</div></div>
+            <div class="py-3 pl-3"><div class="font-label-mono text-[9px] uppercase text-on-surface-variant">Writes</div><div class="font-mono-data text-[12px] mt-1">none</div></div>
+          </div>
+
+          <div class="mt-7 flex flex-col sm:flex-row gap-2.5">
+            <button class="bg-primary text-surface hover:bg-secondary px-5 py-3 font-label-mono text-label-mono uppercase font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed" id="btn-authorize-github" type="button">
+              AUTHORIZE WITH GITHUB
+            </button>
+            <button class="border border-primary px-4 py-3 font-label-mono text-label-mono uppercase font-semibold hover:bg-primary hover:text-surface transition-colors" id="btn-auth-token" type="button">
+              USE ACCESS TOKEN
+            </button>
+            <button class="text-action px-2 py-3 font-label-mono text-label-mono uppercase text-on-surface-variant hover:text-on-surface underline decoration-1 underline-offset-4 transition-colors" id="btn-auth-public" type="button">
+              PUBLIC ONLY
+            </button>
+          </div>
+          <div class="font-label-mono text-[10px] text-on-surface-variant mt-3" id="auth-gate-status">AUTHORIZATION REQUIRED · NO DATA HAS BEEN REQUESTED</div>
+
+          <div class="hidden mt-6 border border-outline-variant/60 p-4 bg-surface-container-low" id="auth-token-panel">
+            <label class="block font-label-mono text-[10px] text-on-surface-variant uppercase mb-2" for="auth-token-input">
+              PERSONAL ACCESS TOKEN — REPO SCOPE
+            </label>
+            <input class="w-full bg-transparent border border-primary px-3 py-2 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="auth-token-input" placeholder="ghp_… or github_pat_…" type="password" autocomplete="off" spellcheck="false"/>
+            <div class="flex flex-wrap items-center gap-3 mt-2.5">
+              <button class="bg-primary text-surface hover:bg-secondary px-4 py-1.5 font-label-mono text-label-mono uppercase font-semibold transition-colors" id="btn-auth-token-apply" type="button">
+                AUTHORIZE TOKEN
+              </button>
+              <a class="font-label-mono text-[10px] uppercase text-on-surface-variant hover:text-secondary underline decoration-1 underline-offset-4" href="https://github.com/settings/tokens/new?scopes=repo&amp;description=Logbook" target="_blank" rel="noopener">
+                Create a token ↗
+              </a>
+            </div>
+            <p class="font-label-mono text-[10px] leading-relaxed text-on-surface-variant mt-2.5">
+              Held in <code class="text-on-surface">sessionStorage</code> for this tab only. For a token that never reaches JavaScript, use the OAuth bridge.
+            </p>
+          </div>
+        </div>
+
+        <aside class="border-t lg:border-t-0 lg:border-l border-outline-variant/50 pt-7 lg:pt-0 lg:pl-10">
+          <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">THE REQUEST</div>
+          <div class="mt-4 space-y-4 font-body-sm text-body-sm text-on-surface-variant">
+            <p>Logbook asks GitHub for access to your private repositories. The bridge only issues read-only API requests; the token stays on the server and is never written into this page.</p>
+            <p>OAuth scopes: <span class="font-mono-data text-on-surface" id="auth-scope-text">repo · read:org · read:user · user:email · gist</span></p>
+          </div>
+
+          <div class="mt-6 border-t border-outline-variant/50 pt-4" id="auth-local-card">
+            <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">LOCAL GITHUB CLI</div>
+            <div class="mt-2 font-mono-data text-body-sm text-on-surface" id="auth-local-login">Checking…</div>
+            <div class="mt-1 font-label-mono text-[10px] text-on-surface-variant" id="auth-local-scopes"></div>
+            <button class="hidden mt-2.5 border border-outline-variant/70 hover:border-secondary hover:text-secondary px-3 py-1.5 font-label-mono text-[10px] uppercase transition-colors" id="btn-auth-local" type="button">
+              AUTHORIZE WITH LOCAL CLI
+            </button>
+          </div>
+
+          <div class="mt-6 border-t border-outline-variant/50 pt-4">
+            <div class="font-label-mono text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">WHAT PRIVATE ACCESS ADDS</div>
+            <ul class="mt-3 space-y-2 font-body-sm text-body-sm text-on-surface-variant">
+              <li class="flex gap-2"><span class="text-secondary">§</span><span>Private repository ledger, languages, and push log.</span></li>
+              <li class="flex gap-2"><span class="text-secondary">§</span><span>Commit, issue, pull request, and review telemetry.</span></li>
+              <li class="flex gap-2"><span class="text-secondary">§</span><span>Organizations, starred repositories, gists, and followers.</span></li>
+              <li class="flex gap-2"><span class="text-secondary">§</span><span>File trees and source inspection for private repositories.</span></li>
+            </ul>
+          </div>
+
+          <div class="mt-6 border-t border-outline-variant/50 pt-4 font-label-mono text-[10px] leading-relaxed text-on-surface-variant" id="auth-setup-note">
+            Bridge offline? Run <code class="text-on-surface">npm start</code> with OAuth credentials, or authorize with a repo-scoped token.
+          </div>
+        </aside>
+      </div>
+
+      <div class="border-t border-outline-variant/50 mt-8 pt-3 flex flex-wrap items-center justify-between gap-2 font-label-mono text-[9px] uppercase text-on-surface-variant">
+        <span>LOGBOOK 4.13 · AUTHORIZATION GATE</span>
+        <span>GITHUB.COM · READ-ONLY REQUESTS · SESSION ONLY</span>
+      </div>
+    </div>
+  </div>
+
   <!-- TOP SYNC PROGRESS HAIRLINE -->
   <div class="fixed top-0 left-0 right-0 h-[2px] z-[60] overflow-hidden pointer-events-none opacity-0 transition-opacity duration-200" id="sync-progress-bar">
     <div class="w-full h-full bg-secondary sync-sweep"></div>
@@ -225,7 +329,7 @@
         <div class="flex items-center space-x-md">
           <a href="#section-now" class="font-headline-md text-headline-md font-normal tracking-tight text-on-surface hover:text-secondary transition-colors flex items-center gap-2" id="brand-logo">
             <span>Logbook</span>
-            <span class="hidden sm:inline-block font-label-mono text-[9px] uppercase tracking-widest px-1 py-0.5 border border-outline-variant/60 text-on-surface-variant">v4.12</span>
+            <span class="hidden sm:inline-block font-label-mono text-[9px] uppercase tracking-widest px-1 py-0.5 border border-outline-variant/60 text-on-surface-variant">v4.13</span>
           </a>
           <div class="h-4 w-px bg-outline-variant/60"></div>
           <!-- Interactive Handle Switcher Trigger -->
@@ -234,6 +338,7 @@
               <span class="material-symbols-outlined text-surface text-[15px]" id="header-avatar-icon">person</span>
             </div>
             <span class="font-label-mono text-label-mono text-on-surface font-medium lowercase group-hover:text-secondary transition-colors" id="header-handle">@handle</span>
+            <span class="hidden font-label-mono text-[8px] uppercase tracking-widest px-1 py-0.5 border border-secondary text-secondary" id="header-auth-badge" title="Authenticated session — private repositories included">private</span>
             <span class="font-label-mono text-[9px] text-on-surface-variant">▾</span>
           </button>
         </div>
@@ -298,7 +403,7 @@
         <div class="flex items-center space-x-2">
           <span class="w-2 h-2 bg-secondary inline-block"></span>
           <span class="uppercase tracking-wider">ACTIVE TELEMETRY FILTER:</span>
-          <span class="font-bold underline underline-offset-4" id="active-filter-text">storefront</span>
+          <span class="font-bold underline underline-offset-4" id="active-filter-text">ALL REPOSITORIES</span>
         </div>
         <button class="px-2 py-0.5 border border-surface/40 hover:bg-secondary hover:border-secondary text-surface uppercase transition-colors" id="btn-clear-global-filter" type="button">
           Clear Filter [ESC]
@@ -331,7 +436,7 @@
                     MODE: RELATIVE
                   </button>
                   <button class="font-label-mono text-[10px] bg-primary text-surface hover:bg-secondary px-2.5 py-0.5 uppercase transition-colors" id="btn-inspect-hero-diff" type="button">
-                    [ INSPECT DIFF · 6 FILES ]
+                    [ INSPECT DIFF ]
                   </button>
                 </div>
               </div>
@@ -341,32 +446,32 @@
               </h1>
 
               <div class="font-mono-data text-body-sm text-on-surface-variant flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span id="hero-commit-date">Tue 20 Oct 2026</span>
+                <span id="hero-commit-date">—</span>
                 <span>·</span>
-                <span id="hero-commit-time">09:41</span>
+                <span id="hero-commit-time">—</span>
                 <span>·</span>
-                <span class="px-1.5 py-0.5 bg-surface-container text-on-surface font-label-mono text-label-mono border border-outline-variant/40" id="hero-commit-branch">main</span>
+                <span class="px-1.5 py-0.5 bg-surface-container text-on-surface font-label-mono text-label-mono border border-outline-variant/40" id="hero-commit-branch">—</span>
                 <span>·</span>
-                <button class="text-on-surface underline decoration-outline-variant/60 hover:text-secondary hover:decoration-secondary transition-colors font-mono-data" id="hero-commit-hash" title="Click to copy SHA or inspect diff" type="button">a3f9c21</button>
+                <button class="text-on-surface underline decoration-outline-variant/60 hover:text-secondary hover:decoration-secondary transition-colors font-mono-data" id="hero-commit-hash" title="Click to copy SHA or inspect diff" type="button">—</button>
                 <span class="font-label-mono text-[10px] text-[#2E7D6B] border border-[#2E7D6B]/40 px-1 py-0.2" id="hero-ci-badge">✓ CI PASSED (42s)</span>
               </div>
 
               <p class="font-headline-md text-headline-md text-on-surface mt-4 max-w-xl font-normal leading-snug cursor-pointer hover:text-secondary transition-colors" id="hero-commit-msg" title="Click to open commit patch inspector">
-                fix: reset order sequence after failed checkout
+                Awaiting commit data…
               </p>
             </div>
 
             <div class="mt-8 pt-4 border-t border-outline-variant/30 flex flex-wrap items-center justify-between gap-y-3 gap-x-6">
               <div class="flex flex-wrap items-center gap-y-2 gap-x-4">
                 <a class="font-mono-data text-mono-data text-on-surface underline decoration-primary decoration-1 underline-offset-4 hover:text-secondary hover:decoration-secondary transition-colors" href="#section-repositories" id="hero-repo-link">
-                  storefront
+                  —
                 </a>
                 <span class="text-outline-variant/80">/</span>
                 <div class="flex items-center space-x-3">
                   <span class="font-mono-data text-body-sm text-on-surface">
-                    <span class="text-[#2E7D6B] font-semibold" id="hero-additions">+142</span>
-                    <span class="text-[#D98A94] font-semibold ml-1" id="hero-deletions">−37</span>
-                    <span class="text-on-surface-variant ml-1" id="hero-files-count">· 6 files</span>
+                    <span class="text-[#2E7D6B] font-semibold" id="hero-additions"></span>
+                    <span class="text-[#D98A94] font-semibold ml-1" id="hero-deletions"></span>
+                    <span class="text-on-surface-variant ml-1" id="hero-files-count"></span>
                   </span>
                   <div class="w-[120px] h-[6px] flex bg-surface-container-high overflow-hidden">
                     <div class="h-full bg-[#2E7D6B] bar-anim" id="hero-add-bar" style="width: 79%;"></div>
@@ -491,7 +596,7 @@
           <div class="px-4 py-2.5 border-b border-outline-variant/40 flex flex-wrap items-center justify-between gap-2 bg-surface-container">
             <div class="flex items-center space-x-3 font-label-mono text-label-mono">
               <span class="bg-primary text-surface px-1.5 py-0.5 font-bold">PATCH FOLIO</span>
-              <span class="text-on-surface font-semibold" id="drawer-commit-title">storefront@a3f9c21 — fix: reset order sequence after failed checkout</span>
+              <span class="text-on-surface font-semibold" id="drawer-commit-title">Awaiting commit selection</span>
             </div>
             <div class="flex items-center space-x-3 font-label-mono text-[10px]">
               <button class="px-2 py-0.5 border border-outline-variant/60 bg-primary text-surface" id="btn-diff-unified" type="button">UNIFIED</button>
@@ -526,7 +631,7 @@
                 <span class="font-label-mono text-label-mono text-on-surface-variant tracking-wider uppercase">COMMITS</span>
                 <span class="w-1.5 h-1.5 bg-transparent group-hover:bg-secondary transition-colors"></span>
               </div>
-              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-commits">281</div>
+              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-commits">—</div>
             </div>
             <div class="relative">
               <div class="flex items-center justify-between mb-2">
@@ -554,7 +659,7 @@
                 <span class="font-label-mono text-label-mono text-on-surface-variant tracking-wider uppercase">PULL REQUESTS</span>
                 <span class="w-1.5 h-1.5 bg-transparent group-hover:bg-secondary transition-colors"></span>
               </div>
-              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-prs">12</div>
+              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-prs">—</div>
             </div>
             <div class="relative">
               <div class="flex items-center justify-between mb-2">
@@ -582,7 +687,7 @@
                 <span class="font-label-mono text-label-mono text-on-surface-variant tracking-wider uppercase">ISSUES</span>
                 <span class="w-1.5 h-1.5 bg-transparent group-hover:bg-secondary transition-colors"></span>
               </div>
-              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-issues">9</div>
+              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-issues">—</div>
             </div>
             <div class="relative">
               <div class="flex items-center justify-between mb-2">
@@ -610,7 +715,7 @@
                 <span class="font-label-mono text-label-mono text-on-surface-variant tracking-wider uppercase">REVIEWS</span>
                 <span class="w-1.5 h-1.5 bg-secondary transition-colors"></span>
               </div>
-              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-reviews">5</div>
+              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-reviews">—</div>
             </div>
             <div class="relative">
               <div class="flex items-center justify-between mb-2">
@@ -639,7 +744,7 @@
                 <span class="font-label-mono text-label-mono text-on-surface-variant tracking-wider uppercase">REPOS TOUCHED</span>
                 <span class="w-1.5 h-1.5 bg-transparent group-hover:bg-secondary transition-colors"></span>
               </div>
-              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-repos">8</div>
+              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-repos">—</div>
             </div>
             <div class="relative">
               <div class="flex items-center justify-between mb-2">
@@ -667,7 +772,7 @@
                 <span class="font-label-mono text-label-mono text-on-surface-variant tracking-wider uppercase">CODE VOLUME</span>
                 <span class="w-1.5 h-1.5 bg-transparent group-hover:bg-secondary transition-colors"></span>
               </div>
-              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-lines">+12.3k</div>
+              <div class="font-headline-xl text-[3.2rem] xl:text-[3.5rem] leading-none text-on-surface mt-2 mb-2 font-normal tabular-nums" id="kpi-val-lines">—</div>
             </div>
             <div class="relative">
               <div class="flex items-center justify-between mb-2">
@@ -757,7 +862,7 @@
                 <!-- Dynamic Floating Tooltip for Heatmap Cells -->
                 <div class="bg-primary text-surface p-2 font-label-mono text-[10px] whitespace-nowrap z-30 pointer-events-none transition-all duration-75" id="heatmap-floating-tooltip" style="position: absolute; top: 34px; left: 825px;">
                   <div class="font-bold" id="hm-tip-title">Fri 14 Aug 2026 · 31 commits · 4 repos</div>
-                  <div class="text-surface-dim font-normal mt-0.5" id="hm-tip-sub">storefront (18) · pdf-tools (9) · click to filter</div>
+                  <div class="text-surface-dim font-normal mt-0.5" id="hm-tip-sub">computed from fetched commit timestamps</div>
                 </div>
 
                 <!-- Streak bracket beneath cols 24-29 -->
@@ -799,7 +904,7 @@
               <span class="font-label-mono text-[10px] text-on-surface-variant" id="punch-readout">PUNCH CARD MATRIX · HOVER CELL</span>
             </div>
             <p class="font-headline-md italic text-body-md text-on-surface-variant mb-6 font-normal" id="punch-editorial-note">
-              Most work happens after 10 pm, Tuesday to Thursday.
+              Awaiting GitHub telemetry.
             </p>
             <!-- Punch card 7 rows x 24 cols -->
             <div class="relative overflow-x-auto pb-4">
@@ -826,7 +931,7 @@
           <div class="xl:col-span-5 pl-0 xl:pl-space-xl border-t xl:border-t-0 xl:border-l border-outline-variant/40 pt-space-lg xl:pt-0">
             <div class="flex items-baseline justify-between mb-2">
               <span class="font-label-mono-bold text-label-mono-bold uppercase tracking-widest text-on-surface" id="focus-header-title">FOCUS — WHERE THE COMMITS WENT (90D)</span>
-              <span class="font-label-mono text-[10px] text-on-surface-variant" id="focus-total-commits">281 TOTAL</span>
+              <span class="font-label-mono text-[10px] text-on-surface-variant" id="focus-total-commits">—</span>
             </div>
             <p class="font-headline-md italic text-body-md text-on-surface-variant mb-6 font-normal">
               Ranked allocation across the active portfolio. Click a bar to filter ledger.
@@ -850,7 +955,7 @@
         <div class="flex flex-col sm:flex-row sm:items-baseline justify-between mb-6 gap-y-2">
           <div class="flex items-baseline space-x-3">
             <h2 class="font-headline-lg text-headline-lg text-on-surface font-normal">Repositories</h2>
-            <span class="font-mono-data text-body-lg text-on-surface-variant" id="repo-count-badge">38</span>
+            <span class="font-mono-data text-body-lg text-on-surface-variant" id="repo-count-badge">—</span>
           </div>
           <div class="flex items-center space-x-3 font-label-mono text-[10px] text-on-surface-variant">
             <span>CLICK ROW TO EXPAND FOLIO · J/K TO NAVIGATE · ENTER TO INSPECT FILES</span>
@@ -970,7 +1075,7 @@
           <div class="px-4 py-3 bg-primary text-surface flex flex-wrap items-center justify-between gap-2 font-label-mono text-label-mono">
             <div class="flex items-center space-x-3">
               <span class="bg-secondary text-white px-1.5 py-0.5 font-bold">REPO FOLIO</span>
-              <span class="font-bold text-[12px]" id="inspector-repo-name">storefront</span>
+              <span class="font-bold text-[12px]" id="inspector-repo-name">—</span>
               <span class="text-surface-dim" id="inspector-repo-meta">PHP · 112 commits · branch: main</span>
             </div>
             <div class="flex items-center space-x-2">
@@ -1088,13 +1193,6 @@
             <!-- Repository Filter Select -->
             <select aria-label="Filter push log by repository" class="font-label-mono text-label-mono text-on-surface bg-surface border border-outline-variant/60 px-2 py-1 hover:border-primary focus:outline-none cursor-pointer" id="push-repo-select">
               <option value="ALL">All repositories ▾</option>
-              <option value="storefront">storefront</option>
-              <option value="pdf-tools">pdf-tools</option>
-              <option value="journal">journal</option>
-              <option value="stats-explorer">stats-explorer</option>
-              <option value="sql-labs">sql-labs</option>
-              <option value="ml-notebooks">ml-notebooks</option>
-              <option value="portfolio">portfolio</option>
             </select>
           </div>
         </div>
@@ -1126,7 +1224,7 @@
        ========================================================================= -->
   <footer class="w-full bg-surface border-t border-outline-variant/40 mt-space-3xl">
     <div class="max-w-[1360px] mx-auto px-margin md:px-margin-desktop h-14 flex flex-wrap items-center justify-between text-on-surface-variant font-label-mono text-label-mono gap-2">
-      <p class="tracking-wider uppercase">LOGBOOK · 2026 EDITION · GENERATED FROM GIT REFS · TABULAR REVISION 4.12</p>
+      <p class="tracking-wider uppercase">LOGBOOK · AWAITING GITHUB TELEMETRY · TABULAR REVISION 4.13</p>
       <div class="flex items-center space-x-md text-on-surface-variant">
         <button class="hover:text-on-surface underline underline-offset-4 uppercase" id="footer-btn-print" type="button">Print Folio</button>
         <span class="flex items-center space-x-xs">
@@ -1163,24 +1261,29 @@
   </div>
 
   <!-- 2. GITHUB ACCOUNT + TOKEN MODAL -->
-  <div aria-hidden="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-20 px-4" id="profile-modal">
-    <div class="w-full max-w-lg bg-surface border-2 border-primary text-on-surface p-5">
-      <div class="flex items-center justify-between pb-3 border-b border-outline-variant/50 mb-4">
+  <div aria-hidden="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-20 px-4 pb-6 overflow-y-auto" id="profile-modal">
+    <div class="w-full max-w-2xl bg-surface border-2 border-primary text-on-surface p-5">
+      <div class="flex items-center justify-between gap-3 pb-3 border-b border-outline-variant/50 mb-4">
         <div class="flex items-center space-x-2">
           <span class="w-2 h-2 bg-secondary"></span>
           <span class="font-label-mono-bold uppercase tracking-widest">GITHUB ACCOUNT / ACCESS</span>
         </div>
-        <button class="font-label-mono text-label-mono hover:text-secondary" id="btn-close-profile-modal" type="button">[x]</button>
+        <div class="flex items-center gap-3">
+          <button class="hidden font-label-mono text-[10px] uppercase px-2 py-0.5 border border-outline-variant/70 hover:border-secondary hover:text-secondary transition-colors" id="btn-sign-out" type="button">Sign out</button>
+          <button class="font-label-mono text-label-mono hover:text-secondary" id="btn-close-profile-modal" type="button">[x]</button>
+        </div>
       </div>
 
-      <p class="font-body-sm text-body-sm text-on-surface-variant mb-4">
+      <p class="font-body-sm text-body-sm text-on-surface-variant mb-4" id="profile-auth-status">
         This folio reads <strong class="text-on-surface">live</strong> from the GitHub REST API. Public data needs no key.
-        Add a personal access token to include <strong class="text-on-surface">private repositories</strong> and raise the limit to 5,000 requests/hour.
+        Authorize a session to include <strong class="text-on-surface">private repositories</strong> and raise the limit to 5,000 requests/hour.
       </p>
+
+      <div id="account-dossier" class="mb-5"></div>
 
       <div class="border-t border-outline-variant/50 pt-4">
         <label class="block font-label-mono text-[10px] text-on-surface-variant uppercase mb-2" for="github-live-input">
-          GITHUB USERNAME
+          GITHUB USERNAME — PUBLIC TELEMETRY
         </label>
         <div class="flex gap-2">
           <input class="flex-1 bg-transparent border border-primary px-3 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="github-live-input" placeholder="thebinayghimire" type="text" value="thebinayghimire"/>
@@ -1195,18 +1298,19 @@
           PERSONAL ACCESS TOKEN — OPTIONAL, SESSION ONLY
         </label>
         <div class="flex gap-2">
-          <input class="flex-1 bg-transparent border border-outline-variant/70 px-3 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="github-token-input" placeholder="ghp_… (repo scope)" type="password" autocomplete="off"/>
+          <input class="flex-1 bg-transparent border border-outline-variant/70 px-3 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="github-token-input" placeholder="ghp_… / github_pat_… (repo scope)" type="password" autocomplete="off"/>
           <button class="border border-primary px-4 py-1.5 font-label-mono text-label-mono uppercase font-semibold hover:bg-primary hover:text-surface transition-colors" id="btn-save-token" type="button">
             Apply
           </button>
         </div>
         <div class="font-label-mono text-[10px] text-on-surface-variant mt-2">
           Held in <code class="text-on-surface">sessionStorage</code> for this tab only — never written to the page or repository.
+          For a token that never reaches JavaScript, use <code class="text-on-surface">npm start</code> and the OAuth gate.
         </div>
       </div>
 
       <div class="border-t border-outline-variant/50 pt-3 mt-4 font-label-mono text-[10px] text-on-surface-variant" id="github-fetch-status">
-        Endpoints used: /users/:user · /users/:user/repos · /repos/:owner/:repo/commits · /repos/:owner/:repo/languages · /search/issues
+        Endpoints used: /user · /user/repos · /repos/:owner/:repo/commits · /repos/:owner/:repo/languages · /search/issues
       </div>
     </div>
   </div>
@@ -1245,9 +1349,11 @@
   // =========================================================================
   var DEFAULT_USER = "thebinayghimire";
   var API_ROOT = "https://api.github.com";
-  var CACHE_KEY = "logbook:github:payload:v1";
-  var CACHE_TTL_MS = 20 * 60 * 1000;
-  var MAX_DEEP_REPOS = 24;
+  var PROXY_ROOT = "/api/gh";
+  var AUTH_API = "/api";
+  var CACHE_KEY = "logbook:github:payload:v2";
+  var CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+  var MAX_DEEP_REPOS = 100;
   var CONCURRENCY = 6;
 
   var LANG_COLORS = {
@@ -1417,6 +1523,10 @@
     globalRepoFilter: null,
     token: "",
     username: DEFAULT_USER,
+    mode: "public",
+    auth: null,
+    authProbe: null,
+    privateCount: 0,
     loading: false,
     error: null,
     rate: null,
@@ -1445,17 +1555,26 @@
   // =========================================================================
   // 5. GITHUB TRANSPORT
   // =========================================================================
+  function usingServerAuth() {
+    return state.mode === "server";
+  }
+
   function authHeaders() {
     var h = { "Accept": "application/vnd.github+json" };
-    if (state.token) h["Authorization"] = "Bearer " + state.token;
+    if (state.mode === "token" && state.token) h["Authorization"] = "Bearer " + state.token;
     return h;
   }
 
   function noteRate(res) {
     var rem = res.headers.get("x-ratelimit-remaining");
+    var lim = res.headers.get("x-ratelimit-limit");
     var reset = res.headers.get("x-ratelimit-reset");
     if (rem !== null) {
-      state.rate = { remaining: parseInt(rem, 10), reset: reset ? parseInt(reset, 10) * 1000 : 0 };
+      state.rate = {
+        remaining: parseInt(rem, 10),
+        limit: lim ? parseInt(lim, 10) : 60,
+        reset: reset ? parseInt(reset, 10) * 1000 : 0
+      };
       updateRateBadge();
     }
   }
@@ -1465,13 +1584,21 @@
     if (!el) return;
     if (!state.rate) { el.textContent = ""; return; }
     var when = state.rate.reset ? new Date(state.rate.reset).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
-    el.textContent = "RATE " + state.rate.remaining + "/60 · RESET " + when;
+    el.textContent = "RATE " + state.rate.remaining + "/" + (state.rate.limit || 60) + " · RESET " + when;
     el.className = "font-label-mono text-[10px] " + (state.rate.remaining < 10 ? "text-secondary font-bold" : "text-on-surface-variant");
   }
 
   async function gh(path) {
-    var res = await fetch(API_ROOT + path, { headers: authHeaders() });
+    var res = await fetch((usingServerAuth() ? PROXY_ROOT : API_ROOT) + path, {
+      headers: authHeaders(),
+      credentials: "same-origin"
+    });
     noteRate(res);
+    if (res.status === 401) {
+      var a = new Error("GitHub authorization is no longer valid");
+      a.code = "AUTH_REQUIRED";
+      throw a;
+    }
     if (res.status === 403 || res.status === 429) {
       var e = new Error("rate-limited");
       e.code = "RATE_LIMIT";
@@ -1482,8 +1609,607 @@
       n.code = "NOT_FOUND";
       throw n;
     }
+    if (res.status === 409) {
+      var empty = new Error("empty-repository");
+      empty.code = "EMPTY_REPO";
+      throw empty;
+    }
     if (!res.ok) throw new Error("GitHub " + res.status + " for " + path);
     return res.json();
+  }
+
+  async function ghAll(path, maxPages) {
+    var all = [];
+    var page = 1;
+    var cap = maxPages || 20;
+    var sep = path.indexOf("?") === -1 ? "?" : "&";
+    while (page <= cap) {
+      var batch = await gh(path + sep + "per_page=100&page=" + page);
+      if (!Array.isArray(batch)) break;
+      all = all.concat(batch);
+      if (batch.length < 100) break;
+      page++;
+    }
+    return all;
+  }
+
+  function repoApiPath(fullName) {
+    return String(fullName || "").split("/").map(encodeURIComponent).join("/");
+  }
+
+  // =========================================================================
+  // 5b. AUTHORIZATION BRIDGE / GITHUB CONSENT
+  // =========================================================================
+
+  var TOKEN_STORAGE_KEY = "logbook:token";
+  var PUBLIC_ONLY_KEY = "logbook:publicOnly";
+
+  function safeHttpUrl(value) {
+    if (!value) return "";
+    var raw = String(value).trim();
+    if (!raw) return "";
+    if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
+    try {
+      var u = new URL(raw, window.location.href);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+      return u.href;
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function clearStoredToken() {
+    state.token = "";
+    try { sessionStorage.removeItem(TOKEN_STORAGE_KEY); } catch (e) {}
+  }
+
+  async function probeAuthBridge() {
+    try {
+      var res = await fetch(AUTH_API + "/session", {
+        headers: { "Accept": "application/json" },
+        credentials: "same-origin",
+        cache: "no-store"
+      });
+      if (!res.ok) return null;
+      var ct = res.headers.get("content-type") || "";
+      if (ct.indexOf("application/json") === -1) return null;
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function authErrorMessage(code) {
+    var messages = {
+      access_denied: "AUTHORIZATION CANCELLED · NO DATA WAS REQUESTED",
+      invalid_state: "THE OAUTH HANDSHAKE EXPIRED · TRY AGAIN",
+      oauth_failed: "THE OAUTH HANDSHAKE FAILED · TRY AGAIN",
+      token_exchange_failed: "GITHUB REJECTED THE OAUTH EXCHANGE · CHECK THE CLIENT SECRET",
+      bad_verification_code: "THE OAUTH CODE EXPIRED · TRY AGAIN"
+    };
+    return messages[code] || ("AUTHORIZATION FAILED · " + String(code || "UNKNOWN").toUpperCase());
+  }
+
+  function authErrorFromUrl() {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var code = params.get("auth_error");
+      if (!code) return "";
+      var clean = window.location.pathname + (window.location.hash || "");
+      history.replaceState({}, "", clean);
+      return code;
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function setAuthGateBusy(busy, message) {
+    ["btn-authorize-github", "btn-auth-token-apply", "btn-auth-public", "btn-auth-local"].forEach(function (id) {
+      var b = document.getElementById(id);
+      if (b) b.disabled = !!busy;
+    });
+    var status = document.getElementById("auth-gate-status");
+    if (status) {
+      status.textContent = message || "";
+      status.className = "font-label-mono text-[10px] mt-3 " + (busy ? "text-secondary" : (String(message || "").indexOf("FAILED") !== -1 || String(message || "").indexOf("REJECTED") !== -1 ? "text-secondary" : "text-on-surface-variant"));
+    }
+  }
+
+  function showAuthGate(probe, message) {
+    var gate = document.getElementById("auth-gate");
+    if (!gate) return;
+    state.authProbe = probe || state.authProbe;
+    gate.classList.remove("hidden");
+    document.body.style.overflow = "hidden";
+    // A previous authorize attempt may have left these disabled.
+    setAuthGateBusy(false);
+
+    var canOauth = !!(probe && probe.oauthConfigured);
+    var localLogin = probe && (probe.localLogin || probe.login);
+    var canLocal = !!(probe && (probe.localAvailable || probe.authorized));
+    var online = !!probe;
+
+    setText("auth-bridge-status", online ? "BRIDGE ONLINE · CONSENT REQUIRED" : "BRIDGE OFFLINE · STATIC MODE");
+    if (probe && probe.oauthScopes) {
+      setText("auth-scope-text", String(probe.oauthScopes).split(/\s+/).filter(Boolean).join(" · "));
+    }
+
+    var primary = document.getElementById("btn-authorize-github");
+    if (primary) {
+      primary.disabled = false;
+      if (canOauth) {
+        primary.textContent = "AUTHORIZE WITH GITHUB";
+        primary.dataset.authAction = "oauth";
+      } else if (canLocal) {
+        primary.textContent = "AUTHORIZE @" + String(localLogin || "GITHUB CLI").toUpperCase();
+        primary.dataset.authAction = "local";
+      } else {
+        primary.textContent = "AUTHORIZATION BRIDGE OFFLINE";
+        primary.dataset.authAction = "offline";
+        primary.disabled = true;
+      }
+    }
+
+    setText("auth-local-login", canLocal
+      ? "@" + localLogin
+      : (online ? "No active GitHub CLI session" : "Bridge not running"));
+    setText("auth-local-scopes", canLocal && probe.localScopes
+      ? "SCOPES · " + probe.localScopes
+      : (canLocal ? "ACTIVE SERVER SESSION · RE-AUTHORIZE TO KEEP IT" : (online ? "RUN gh auth login TO ENABLE THE LOCAL FALLBACK" : "START THE NODE BRIDGE TO ENABLE OAUTH")));
+
+    var localBtn = document.getElementById("btn-auth-local");
+    if (localBtn) {
+      localBtn.classList.toggle("hidden", !(canLocal && canOauth));
+      localBtn.textContent = "AUTHORIZE @" + String(localLogin || "GITHUB CLI").toUpperCase();
+    }
+
+    var note = document.getElementById("auth-setup-note");
+    if (note) {
+      if (canOauth) {
+        note.innerHTML = "OAuth app connected. The callback is locked to <code class=\"text-on-surface\">" + escapeHtml(probe.callbackUrl || "the configured URL") + "</code>. Tokens stay on the bridge.";
+      } else if (canLocal) {
+        note.innerHTML = "Clicking authorize adopts the existing <code class=\"text-on-surface\">gh</code> token for this browser session. The token stays on the server and is never written into the page.";
+      } else {
+        note.innerHTML = "Private access is unavailable here. Use a repo-scoped token, or run <code class=\"text-on-surface\">npm start</code> with <code class=\"text-on-surface\">GITHUB_CLIENT_ID</code> and <code class=\"text-on-surface\">GITHUB_CLIENT_SECRET</code>.";
+      }
+    }
+
+    var panel = document.getElementById("auth-token-panel");
+    if (panel) panel.classList.add("hidden");
+    var tokenInput = document.getElementById("auth-token-input");
+    if (tokenInput) tokenInput.value = "";
+
+    var status = document.getElementById("auth-gate-status");
+    if (status) {
+      status.textContent = message || "AUTHORIZATION REQUIRED · NO DATA HAS BEEN REQUESTED";
+      status.className = "font-label-mono text-[10px] mt-3 " + (message ? "text-secondary" : "text-on-surface-variant");
+    }
+  }
+
+  function hideAuthGate() {
+    var gate = document.getElementById("auth-gate");
+    if (gate) gate.classList.add("hidden");
+    document.body.style.overflow = "";
+  }
+
+  async function verifyTokenSession(token, opts) {
+    opts = opts || {};
+    var res;
+    try {
+      res = await fetch(API_ROOT + "/user", {
+        headers: {
+          "Accept": "application/vnd.github+json",
+          "Authorization": "Bearer " + token
+        },
+        cache: "no-store"
+      });
+    } catch (e) {
+      if (opts.silent) return false;
+      var netErr = new Error("Could not reach api.github.com");
+      netErr.code = "NETWORK";
+      throw netErr;
+    }
+    if (!res.ok) {
+      if (opts.silent) return false;
+      var err = new Error(res.status === 401 ? "GitHub rejected this token (401)" : "GitHub returned " + res.status);
+      err.code = res.status === 401 ? "TOKEN_REJECTED" : "TOKEN_ERROR";
+      err.status = res.status;
+      throw err;
+    }
+    var user = await res.json();
+    state.token = token;
+    state.mode = "token";
+    state.username = user.login;
+    state.auth = {
+      authorized: true,
+      mode: "token",
+      login: user.login,
+      profile: user,
+      scopes: res.headers.get("x-oauth-scopes") || ""
+    };
+    return true;
+  }
+
+  async function bootAuth() {
+    var authErr = authErrorFromUrl();
+    try { state.token = sessionStorage.getItem(TOKEN_STORAGE_KEY) || ""; } catch (e) {}
+
+    var publicOnly = false;
+    try { publicOnly = sessionStorage.getItem(PUBLIC_ONLY_KEY) === "1"; } catch (e) {}
+
+    if (publicOnly) {
+      // Public-only means the server-side private session is intentionally
+      // discarded. Keep the consent options ready for a later re-authorization.
+      try {
+        await fetch(AUTH_API + "/logout", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "X-Logbook-Auth": "1", "Accept": "application/json" }
+        });
+      } catch (e) {}
+      state.authProbe = await probeAuthBridge();
+      state.mode = "public";
+      state.auth = null;
+      clearStoredToken();
+      hideAuthGate();
+      await reloadAccount(DEFAULT_USER, true);
+      return;
+    }
+
+    var probe = await probeAuthBridge();
+    state.authProbe = probe;
+
+    // No bridge and no stored token means there is nothing to authorize:
+    // this is the static build, so open the public ledger immediately.
+    if (!probe && !state.token) {
+      state.mode = "public";
+      state.auth = null;
+      hideAuthGate();
+      await reloadAccount(DEFAULT_USER, true);
+      return;
+    }
+
+    if (probe && probe.authorized) {
+      state.auth = probe;
+      state.mode = "server";
+      state.username = probe.login;
+      clearStoredToken();
+      hideAuthGate();
+      await reloadAccount(probe.login, true);
+      return;
+    }
+
+    if (state.token) {
+      var ok = await verifyTokenSession(state.token, { silent: true });
+      if (ok) {
+        hideAuthGate();
+        await reloadAccount(state.auth.login, true);
+        return;
+      }
+      clearStoredToken();
+    }
+
+    state.mode = "public";
+    state.auth = null;
+    state.token = "";
+    showAuthGate(probe, authErr ? authErrorMessage(authErr) : "");
+  }
+
+  async function authorizePrimary() {
+    var btn = document.getElementById("btn-authorize-github");
+    var action = btn ? btn.dataset.authAction : "offline";
+    if (action === "oauth") {
+      clearStoredToken();
+      try { sessionStorage.removeItem(PUBLIC_ONLY_KEY); } catch (e) {}
+      setAuthGateBusy(true, "REDIRECTING TO GITHUB…");
+      window.location.assign("/auth/github");
+      return;
+    }
+    if (action === "local") return authorizeLocalSession();
+    setAuthGateBusy(false, "BRIDGE OFFLINE · START npm start OR USE A TOKEN");
+  }
+
+  async function authorizeLocalSession() {
+    setAuthGateBusy(true, "REQUESTING A SESSION FROM THE GITHUB CLI…");
+    try {
+      var res = await fetch(AUTH_API + "/auth/local", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-Logbook-Auth": "1", "Accept": "application/json" }
+      });
+      var data = null;
+      try { data = await res.json(); } catch (e) {}
+      if (!res.ok || !data || !data.authorized) {
+        throw new Error((data && data.message) || "Local authorization failed");
+      }
+      clearStoredToken();
+      state.auth = data;
+      state.mode = "server";
+      state.username = data.login;
+      try { sessionStorage.removeItem(PUBLIC_ONLY_KEY); } catch (e) {}
+      hideAuthGate();
+      await reloadAccount(data.login, true);
+    } catch (e) {
+      setAuthGateBusy(false, "AUTHORIZATION FAILED · " + String(e.message || e).toUpperCase());
+      showToast("LOCAL AUTHORIZATION FAILED");
+    }
+  }
+
+  async function applyTokenFromGate() {
+    var input = document.getElementById("auth-token-input");
+    var token = ((input && input.value) || "").trim();
+    if (!token) {
+      setAuthGateBusy(false, "ENTER A TOKEN FIRST");
+      if (input) input.focus();
+      return;
+    }
+    setAuthGateBusy(true, "VERIFYING TOKEN WITH GITHUB…");
+    try {
+      await verifyTokenSession(token);
+      try {
+        sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+        sessionStorage.removeItem(PUBLIC_ONLY_KEY);
+      } catch (e) {}
+      hideAuthGate();
+      if (input) input.value = "";
+      await reloadAccount(state.auth.login, true);
+      warnTokenScope();
+    } catch (e) {
+      setAuthGateBusy(false, "TOKEN REJECTED · " + String(e.message || e).toUpperCase());
+      if (input) input.focus();
+    }
+  }
+
+  function warnTokenScope() {
+    if (state.mode !== "token" || !state.auth) return;
+    var scopes = state.auth.scopes ? state.auth.scopes.split(/,\s*/).filter(Boolean) : [];
+    if (scopes.length && scopes.indexOf("repo") === -1 && !state.privateCount) {
+      setStatusBanner("warn", "Token active, but it does not include the repo scope. Private repositories are still hidden — create a token with repo scope and apply it again.");
+    }
+  }
+
+  async function applyTokenFromProfile() {
+    var input = document.getElementById("github-token-input");
+    var token = ((input && input.value) || "").trim();
+    if (!token) {
+      if (state.mode === "token") {
+        var oldLogin = state.auth ? state.auth.login : state.username;
+        clearStoredToken();
+        state.auth = null;
+        state.mode = "public";
+        closeAllModals();
+        await reloadAccount(oldLogin || DEFAULT_USER, true);
+        showToast("TOKEN CLEARED · PUBLIC LEDGER");
+      } else {
+        setText("github-fetch-status", "NO TOKEN APPLIED · PUBLIC LEDGER UNCHANGED");
+      }
+      return;
+    }
+    setText("github-fetch-status", "VERIFYING TOKEN WITH GITHUB…");
+    try {
+      await verifyTokenSession(token);
+      try {
+        sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+        sessionStorage.removeItem(PUBLIC_ONLY_KEY);
+      } catch (e) {}
+      if (input) input.value = "";
+      closeAllModals();
+      hideAuthGate();
+      await reloadAccount(state.auth.login, true);
+      warnTokenScope();
+    } catch (e) {
+      setText("github-fetch-status", "TOKEN REJECTED · " + String(e.message || e).toUpperCase());
+      setStatusBanner("error", "GitHub rejected that access token. Check that it is valid and includes repo scope.");
+    }
+  }
+
+  function authorizePublicMode() {
+    try { sessionStorage.setItem(PUBLIC_ONLY_KEY, "1"); } catch (e) {}
+    clearStoredToken();
+    state.auth = null;
+    state.mode = "public";
+    state.username = DEFAULT_USER;
+    hideAuthGate();
+    window.location.reload();
+  }
+
+  async function signOut() {
+    if (state.mode === "server" || (state.auth && state.auth.mode !== "token")) {
+      try {
+        await fetch(AUTH_API + "/logout", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "X-Logbook-Auth": "1", "Accept": "application/json" }
+        });
+      } catch (e) {
+        window.location.href = "/auth/logout";
+        return;
+      }
+    }
+    clearStoredToken();
+    try {
+      sessionStorage.removeItem(PUBLIC_ONLY_KEY);
+      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    } catch (e) {}
+    try {
+      localStorage.removeItem(CACHE_KEY);
+      localStorage.removeItem("logbook:github:payload:v1");
+    } catch (e) {}
+    state.auth = null;
+    state.token = "";
+    state.mode = "public";
+    state.payload = null;
+    closeAllModals();
+    window.location.reload();
+  }
+
+  function renderAccountDossier() {
+    var box = document.getElementById("account-dossier");
+    if (!box) return;
+    var p = PROFILE || {};
+    var payload = state.payload || {};
+    var account = payload.account || {};
+    var authed = state.mode !== "public" && (!!state.auth || !!state.token);
+    var total = REPOSITORIES.length;
+    var privateRepos = REPOSITORIES.filter(function (r) { return r.vis === "PRIVATE"; });
+    var priv = privateRepos.length;
+    var pub = Math.max(0, total - priv);
+    var modeLabel = state.mode === "server"
+      ? (state.auth && state.auth.mode === "local" ? "GITHUB CLI SESSION" : "GITHUB OAUTH")
+      : (state.mode === "token" ? "ACCESS TOKEN" : "PUBLIC SESSION");
+    var modeClass = authed ? "border-secondary text-secondary" : "border-outline-variant/60 text-on-surface-variant";
+
+    var statusEl = document.getElementById("profile-auth-status");
+    if (statusEl) {
+      if (authed) {
+        statusEl.innerHTML = "AUTHORIZED · <strong class=\"text-on-surface\">@" + escapeHtml(state.username) + "</strong> · " +
+          (priv ? "<strong class=\"text-on-surface\">" + priv + " private</strong> repositories included" : "no private repositories visible") +
+          " · " + escapeHtml(modeLabel);
+      } else {
+        statusEl.innerHTML = "PUBLIC SESSION · private repositories are hidden. Authorize GitHub to read the full account.";
+      }
+    }
+
+    var outBtn = document.getElementById("btn-sign-out");
+    if (outBtn) outBtn.classList.toggle("hidden", !authed);
+
+    if (!authed) {
+      var restore = state.auth && state.auth.login
+        ? '<div class="mt-2.5 pt-2.5 border-t border-outline-variant/40 flex flex-wrap items-center justify-between gap-2">' +
+            '<span class="font-label-mono text-[10px] text-on-surface-variant">AUTHORIZATION STILL ACTIVE FOR @' + escapeHtml(state.auth.login) + '</span>' +
+            '<button type="button" class="border border-outline-variant/70 hover:border-secondary hover:text-secondary px-2.5 py-1 font-label-mono text-[9px] uppercase transition-colors" id="btn-dossier-restore">Resume private view</button>' +
+          '</div>'
+        : '';
+      box.innerHTML =
+        '<div class="border border-outline-variant/60 bg-surface-container-low p-3.5">' +
+          '<div class="flex flex-wrap items-center justify-between gap-3">' +
+            '<div class="min-w-0">' +
+              '<div class="font-label-mono text-[10px] uppercase tracking-widest text-on-surface-variant">PUBLIC SESSION</div>' +
+              '<div class="font-body-sm text-body-sm text-on-surface mt-1">' + (state.auth && state.auth.login
+                ? 'Public telemetry only. Private data is not being fetched for this view.'
+                : 'Private repositories are not being fetched. No GitHub authorization has been granted.') + '</div>' +
+            '</div>' +
+            '<button type="button" class="bg-primary text-surface hover:bg-secondary px-3 py-1.5 font-label-mono text-[10px] uppercase font-semibold transition-colors shrink-0" id="btn-dossier-auth">Authorize GitHub</button>' +
+          '</div>' +
+          restore +
+        '</div>';
+      var authBtn = document.getElementById("btn-dossier-auth");
+      if (authBtn) authBtn.addEventListener("click", function () {
+        closeAllModals();
+        showAuthGate(state.authProbe);
+      });
+      var restoreBtn = document.getElementById("btn-dossier-restore");
+      if (restoreBtn) restoreBtn.addEventListener("click", function () {
+        closeAllModals();
+        try { sessionStorage.removeItem(PUBLIC_ONLY_KEY); } catch (e) {}
+        reloadAccount(state.auth.login, true);
+      });
+      return;
+    }
+
+    var avatar = safeHttpUrl(p.avatar_url);
+    var profileUrl = safeHttpUrl(p.html_url) || ("https://github.com/" + encodeURIComponent(p.login || state.username));
+    var joined = p.created_at ? new Date(p.created_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—";
+    var name = p.name || p.login || state.username;
+    var meta = [];
+    if (p.company) meta.push('<span><span class="text-on-surface">COMPANY</span> ' + escapeHtml(p.company) + '</span>');
+    if (p.location) meta.push('<span><span class="text-on-surface">LOCATION</span> ' + escapeHtml(p.location) + '</span>');
+    if (p.blog) {
+      var blogUrl = safeHttpUrl(p.blog);
+      if (blogUrl) meta.push('<span><span class="text-on-surface">WEB</span> <a class="underline hover:text-secondary" href="' + escapeHtml(blogUrl) + '" target="_blank" rel="noopener">' + escapeHtml(p.blog) + '</a></span>');
+    }
+    meta.push('<span><span class="text-on-surface">JOINED</span> ' + escapeHtml(joined) + '</span>');
+    meta.push('<span><span class="text-on-surface">FOLLOWERS</span> ' + (p.followers || 0) + '</span>');
+    meta.push('<span><span class="text-on-surface">FOLLOWING</span> ' + (p.following || 0) + '</span>');
+
+    function statCell(label, value, accent) {
+      return '<div class="py-2 px-2.5"><div class="font-label-mono text-[8px] uppercase tracking-wider text-on-surface-variant">' + label + '</div>' +
+        '<div class="font-mono-data text-[18px] leading-tight mt-0.5 ' + (accent ? "text-secondary" : "text-on-surface") + '">' + value + '</div></div>';
+    }
+
+    var orgs = account.orgs || [];
+    var orgHtml = orgs.length
+      ? orgs.slice(0, 12).map(function (o) {
+          var u = safeHttpUrl(o.html_url) || ("https://github.com/" + encodeURIComponent(o.login));
+          return '<a class="inline-block border border-outline-variant/50 px-1.5 py-0.5 hover:border-secondary hover:text-secondary" href="' + escapeHtml(u) + '" target="_blank" rel="noopener">' + escapeHtml(o.login) + '</a>';
+        }).join(" ")
+      : '<span class="text-on-surface-variant">None.</span>';
+
+    var starred = account.starred || [];
+    var starredHtml = starred.length
+      ? starred.slice(0, 6).map(function (r) {
+          var u = safeHttpUrl(r.html_url) || ("https://github.com/" + escapeHtml(r.full_name));
+          return '<a class="flex items-center justify-between gap-2 py-1 border-b border-outline-variant/25 hover:text-secondary" href="' + escapeHtml(u) + '" target="_blank" rel="noopener">' +
+            '<span class="truncate">' + escapeHtml(r.full_name) + '</span><span class="font-mono-data text-[10px] shrink-0">★ ' + (r.stargazers_count || 0) + '</span></a>';
+        }).join("") + (starred.length > 6 ? '<div class="font-label-mono text-[9px] text-on-surface-variant pt-1">+' + (starred.length - 6) + ' more</div>' : "")
+      : '<span class="text-on-surface-variant">No starred repositories.</span>';
+
+    var gists = account.gists || [];
+    var gistsHtml = gists.length
+      ? gists.slice(0, 4).map(function (g) {
+          var u = safeHttpUrl(g.html_url) || ("https://gist.github.com/" + encodeURIComponent(g.id));
+          return '<a class="flex items-center justify-between gap-2 py-1 border-b border-outline-variant/25 hover:text-secondary" href="' + escapeHtml(u) + '" target="_blank" rel="noopener">' +
+            '<span class="truncate">' + escapeHtml(g.description || g.id) + '</span><span class="font-label-mono text-[8px] shrink-0 text-on-surface-variant">' + (g.public ? "PUBLIC" : "SECRET") + ' · ' + Object.keys(g.files || {}).length + 'f</span></a>';
+        }).join("") + (gists.length > 4 ? '<div class="font-label-mono text-[9px] text-on-surface-variant pt-1">+' + (gists.length - 4) + ' more</div>' : "")
+      : '<span class="text-on-surface-variant">No gists.</span>';
+
+    var followers = account.followers || [];
+    var following = account.following || [];
+    function peopleChips(list) {
+      if (!list.length) return '<span class="text-on-surface-variant">None.</span>';
+      return list.slice(0, 10).map(function (u) {
+        var link = safeHttpUrl(u.html_url) || ("https://github.com/" + encodeURIComponent(u.login));
+        return '<a class="inline-block border border-outline-variant/50 px-1.5 py-0.5 hover:border-secondary hover:text-secondary" href="' + escapeHtml(link) + '" target="_blank" rel="noopener">@' + escapeHtml(u.login) + '</a>';
+      }).join(" ") + (list.length > 10 ? ' <span class="text-on-surface-variant">+' + (list.length - 10) + '</span>' : "");
+    }
+
+    var privateHtml = privateRepos.length
+      ? privateRepos.slice(0, 12).map(function (r) {
+          return '<a class="inline-block border border-outline-variant/50 px-1.5 py-0.5 hover:border-secondary hover:text-secondary" href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener" title="' + escapeHtml(r.fullName) + '">' + escapeHtml(r.name) + '</a>';
+        }).join(" ") + (privateRepos.length > 12 ? ' <span class="text-on-surface-variant">+' + (privateRepos.length - 12) + ' more in ledger</span>' : "")
+      : '<span class="text-on-surface-variant">No private repositories visible.</span>';
+
+    var tokenNote = state.mode === "server"
+      ? "TOKEN HELD BY THE AUTHORIZATION BRIDGE · NEVER SENT TO THIS PAGE"
+      : "TOKEN HELD IN SESSIONSTORAGE FOR THIS TAB · CLEARED ON SIGN OUT";
+
+    box.innerHTML =
+      '<div class="border border-outline-variant/60 bg-surface-container-low p-3.5">' +
+        '<div class="flex items-start gap-3">' +
+          (avatar
+            ? '<img class="w-14 h-14 shrink-0 object-cover border border-outline-variant/60" src="' + escapeHtml(avatar) + '" alt="@' + escapeHtml(p.login || state.username) + '"/>'
+            : '<div class="w-14 h-14 shrink-0 border border-outline-variant/60 bg-surface-container flex items-center justify-center font-label-mono text-[9px] text-on-surface-variant">GH</div>') +
+          '<div class="min-w-0 flex-1">' +
+            '<div class="flex flex-wrap items-center gap-2">' +
+              '<span class="font-headline-sm text-[20px] leading-tight text-on-surface">' + escapeHtml(name) + '</span>' +
+              '<a class="font-mono-data text-[12px] text-secondary hover:underline" href="' + escapeHtml(profileUrl) + '" target="_blank" rel="noopener">@' + escapeHtml(p.login || state.username) + ' ↗</a>' +
+              '<span class="font-label-mono text-[8px] uppercase tracking-widest border px-1 py-0.5 ' + modeClass + '" title="SCOPES: ' + escapeHtml((state.auth && state.auth.scopes) || "not reported") + '">' + escapeHtml(modeLabel) + '</span>' +
+            '</div>' +
+            '<div class="font-body-sm text-body-sm text-on-surface-variant mt-1">' + escapeHtml(p.bio || "No bio on file.") + '</div>' +
+            '<div class="font-label-mono text-[9px] text-on-surface-variant mt-2 flex flex-wrap gap-x-3 gap-y-1">' + meta.join("") + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="grid grid-cols-3 sm:grid-cols-6 divide-x divide-outline-variant/40 border-y border-outline-variant/40 mt-3.5">' +
+          statCell("ACCESSIBLE", total, false) +
+          statCell("PRIVATE", priv, priv > 0) +
+          statCell("PUBLIC", pub, false) +
+          statCell("STARRED", starred.length, false) +
+          statCell("GISTS", gists.length, false) +
+          statCell("ORGS", orgs.length, false) +
+        '</div>' +
+        '<div class="mt-3">' +
+          '<div class="font-label-mono text-[9px] uppercase tracking-widest text-on-surface-variant">PRIVATE LEDGER · ' + priv + ' REPOSITORIES</div>' +
+          '<div class="mt-1.5 flex flex-wrap gap-1 font-mono-data text-[10px] text-on-surface">' + privateHtml + '</div>' +
+        '</div>' +
+        '<div class="grid sm:grid-cols-2 gap-x-5 gap-y-3 mt-3.5 border-t border-outline-variant/40 pt-3">' +
+          '<div><div class="font-label-mono text-[9px] uppercase tracking-widest text-on-surface-variant">ORGANIZATIONS · ' + orgs.length + '</div><div class="mt-1 flex flex-wrap gap-1 font-mono-data text-[10px]">' + orgHtml + '</div></div>' +
+          '<div><div class="font-label-mono text-[9px] uppercase tracking-widest text-on-surface-variant">STARRED · ' + starred.length + '</div><div class="mt-1 font-mono-data text-[10px]">' + starredHtml + '</div></div>' +
+          '<div><div class="font-label-mono text-[9px] uppercase tracking-widest text-on-surface-variant">GISTS · ' + gists.length + '</div><div class="mt-1 font-mono-data text-[10px]">' + gistsHtml + '</div></div>' +
+          '<div><div class="font-label-mono text-[9px] uppercase tracking-widest text-on-surface-variant">FOLLOWERS · ' + followers.length + '</div><div class="mt-1 flex flex-wrap gap-1 font-mono-data text-[10px]">' + peopleChips(followers) + '</div>' +
+            '<div class="font-label-mono text-[9px] uppercase tracking-widest text-on-surface-variant mt-2">FOLLOWING · ' + following.length + '</div><div class="mt-1 flex flex-wrap gap-1 font-mono-data text-[10px]">' + peopleChips(following) + '</div></div>' +
+        '</div>' +
+        '<div class="font-label-mono text-[8px] uppercase tracking-widest text-on-surface-variant mt-3 pt-2 border-t border-outline-variant/30">' + escapeHtml(tokenNote) + '</div>' +
+      '</div>';
   }
 
   async function mapLimit(items, limit, fn) {
@@ -1508,20 +2234,34 @@
   // 6. FULL ACCOUNT FETCH
   // =========================================================================
   async function fetchAccount(username) {
-    var profile = await gh("/users/" + username);
+    var authenticated = state.mode === "server" || (state.mode === "token" && !!state.token);
+    var ownAccount = false;
+    var profile = null;
 
-    // With a token that belongs to this account we can see private repos too.
-    var reposRaw = null;
-    if (state.token) {
+    // Prefer /user when the authorized token belongs to the requested handle.
+    if (authenticated) {
       try {
         var me = await gh("/user");
-        if (me && me.login && me.login.toLowerCase() === username.toLowerCase()) {
-          reposRaw = await gh("/user/repos?per_page=100&affiliation=owner&sort=pushed&direction=desc");
+        if (me && me.login && (!username || me.login.toLowerCase() === String(username).toLowerCase())) {
+          ownAccount = true;
+          username = me.login;
+          profile = me;
         }
-      } catch (e) { reposRaw = null; }
+      } catch (e) {
+        if (e.code === "AUTH_REQUIRED") throw e;
+      }
+    }
+
+    if (!profile) profile = await gh("/users/" + encodeURIComponent(username));
+
+    // With a token that belongs to this account we can see private repos too —
+    // including collaborator repositories and repositories owned by organizations.
+    var reposRaw = null;
+    if (authenticated && ownAccount) {
+      reposRaw = await ghAll("/user/repos?affiliation=owner,collaborator,organization_member&visibility=all&sort=pushed&direction=desc");
     }
     if (!reposRaw) {
-      reposRaw = await gh("/users/" + username + "/repos?per_page=100&sort=pushed&direction=desc");
+      reposRaw = await ghAll("/users/" + encodeURIComponent(username) + "/repos?sort=pushed&direction=desc");
     }
     if (!Array.isArray(reposRaw)) reposRaw = [];
 
@@ -1529,21 +2269,31 @@
 
     var results = await Promise.all([
       mapLimit(deep, CONCURRENCY, function (r) {
-        return gh("/repos/" + encodeURIComponent(username) + "/" + encodeURIComponent(r.name) + "/commits?per_page=100");
+        if (!r.size) return Promise.resolve([]);
+        return gh("/repos/" + repoApiPath(r.full_name) + "/commits?per_page=100").catch(function (e) {
+          if (e.code === "EMPTY_REPO") return [];
+          throw e;
+        });
       }),
       mapLimit(deep, CONCURRENCY, function (r) {
-        return gh("/repos/" + encodeURIComponent(username) + "/" + encodeURIComponent(r.name) + "/languages");
+        if (!r.size) return Promise.resolve({});
+        return gh("/repos/" + repoApiPath(r.full_name) + "/languages");
       })
     ]);
     var commitSets = results[0];
     var langSets = results[1];
+
+    var failedRepos = 0;
+    deep.forEach(function (r, i) {
+      if (commitSets[i] && commitSets[i].__error) failedRepos++;
+    });
 
     var commits = [];
     var repoCommits = {};
     deep.forEach(function (r, i) {
       var set = commitSets[i];
       if (!Array.isArray(set)) return;
-      repoCommits[r.name] = set.length;
+      repoCommits[r.full_name] = set.length;
       set.forEach(function (c) {
         var iso = (c.commit && c.commit.author && c.commit.author.date) ||
                   (c.commit && c.commit.committer && c.commit.committer.date);
@@ -1552,6 +2302,8 @@
           sha: String(c.sha || "").slice(0, 7),
           fullSha: c.sha,
           repo: r.name,
+          repoFullName: r.full_name,
+          owner: r.owner && r.owner.login ? r.owner.login : "",
           branch: r.default_branch || "main",
           iso: iso,
           date: new Date(iso),
@@ -1566,7 +2318,7 @@
     // Enrich the newest commit with real diff stats + file count
     if (commits.length) {
       try {
-        var detail = await gh("/repos/" + encodeURIComponent(username) + "/" + encodeURIComponent(commits[0].repo) + "/commits/" + commits[0].fullSha);
+        var detail = await gh("/repos/" + repoApiPath(commits[0].repoFullName) + "/commits/" + commits[0].fullSha);
         commits[0].add = detail.stats ? detail.stats.additions : 0;
         commits[0].del = detail.stats ? detail.stats.deletions : 0;
         commits[0].filesCount = detail.files ? detail.files.length : 0;
@@ -1592,9 +2344,31 @@
       gh("/search/issues?q=" + encodeURIComponent("is:pr reviewed-by:" + username) + "&per_page=1").catch(function () { return { total_count: 0 }; })
     ]);
 
+    // Account dossier: organizations, stars, gists, followers, following.
+    // These endpoints only return private-account detail when a token is present.
+    var account = { orgs: [], starred: [], gists: [], followers: [], following: [] };
+    if (authenticated && ownAccount) {
+      var extras = await Promise.all([
+        ghAll("/user/orgs").catch(function () { return []; }),
+        ghAll("/user/starred").catch(function () { return []; }),
+        ghAll("/gists").catch(function () { return []; }),
+        ghAll("/user/followers").catch(function () { return []; }),
+        ghAll("/user/following").catch(function () { return []; })
+      ]);
+      account = {
+        orgs: extras[0] || [],
+        starred: extras[1] || [],
+        gists: extras[2] || [],
+        followers: extras[3] || [],
+        following: extras[4] || []
+      };
+    }
+
     return {
       username: username,
       fetchedAt: Date.now(),
+      partial: failedRepos > 0,
+      failedRepos: failedRepos,
       profile: profile,
       repos: reposRaw,
       deepRepos: deep,
@@ -1602,6 +2376,9 @@
       repoCommits: repoCommits,
       langTotals: langTotals,
       langRepos: langRepos,
+      account: account,
+      privateRepos: reposRaw.filter(function (r) { return r.private; }).length,
+      publicRepos: reposRaw.filter(function (r) { return !r.private; }).length,
       prs: searches[0].total_count || 0,
       issues: searches[1].total_count || 0,
       reviews: searches[2].total_count || 0
@@ -1778,19 +2555,28 @@
       var inRange = commits.filter(function (c) { return c.date.getTime() >= from; });
 
       var repoCounts = {};
-      inRange.forEach(function (c) { repoCounts[c.repo] = (repoCounts[c.repo] || 0) + 1; });
+      inRange.forEach(function (c) {
+        var rk = c.repoFullName || c.repo;
+        repoCounts[rk] = (repoCounts[rk] || 0) + 1;
+      });
       var repoList = Object.keys(repoCounts).sort(function (a, b) { return repoCounts[b] - repoCounts[a]; });
       var maxRepo = repoList.length ? repoCounts[repoList[0]] : 1;
 
       var focus = repoList.slice(0, 5).map(function (r, i) {
-        return { repo: r, count: repoCounts[r], pct: Math.round((repoCounts[r] / maxRepo) * 100), color: i === 0 ? "bg-primary" : (i === 1 ? "bg-[#5A5648]" : (i < 4 ? "bg-[#9A9380]" : "bg-[#C9C2AE]")) };
+        return {
+          repo: r.indexOf("/") === -1 ? r : r.split("/")[1],
+          fullName: r,
+          count: repoCounts[r],
+          pct: Math.round((repoCounts[r] / maxRepo) * 100),
+          color: i === 0 ? "bg-primary" : (i === 1 ? "bg-[#5A5648]" : (i < 4 ? "bg-[#9A9380]" : "bg-[#C9C2AE]"))
+        };
       });
       var others = repoList.length - 5;
       if (others > 0) {
         var rest = repoList.slice(5).reduce(function (s, r) { return s + repoCounts[r]; }, 0);
         focus.push({ repo: others + " others", count: rest, pct: Math.round((rest / maxRepo) * 100), color: "bg-[#E6E1D3]", muted: true });
       }
-      if (!focus.length) focus = [{ repo: "storefront", count: 0, pct: 2, color: "bg-[#E6E1D3]", muted: true }];
+      if (!focus.length) focus = [{ repo: "no activity", count: 0, pct: 2, color: "bg-[#E6E1D3]", muted: true }];
 
       var buckets = key === "7D" ? 7 : 6;
       var series = bucketSeries(commits, days, buckets);
@@ -1862,12 +2648,10 @@
   }
 
   function buildRepositories(payload) {
-    var langByRepo = {};
-    payload.deepRepos.forEach(function (r) { langByRepo[r.name] = r.language; });
-
     var commitDatesByRepo = {};
     payload.commits.forEach(function (c) {
-      (commitDatesByRepo[c.repo] = commitDatesByRepo[c.repo] || []).push(c.date);
+      var key = c.repoFullName || c.repo;
+      (commitDatesByRepo[key] = commitDatesByRepo[key] || []).push(c.date);
     });
 
     var now = Date.now();
@@ -1875,8 +2659,9 @@
     var horizonEnd = now;
 
     return payload.repos.map(function (r, idx) {
-      var dates = commitDatesByRepo[r.name] || [];
-      var total = payload.repoCommits[r.name] || dates.length;
+      var key = r.full_name || r.name;
+      var dates = commitDatesByRepo[key] || [];
+      var total = payload.repoCommits[key] || dates.length;
 
       var bars = [];
       var weekMs = 7 * 86400000;
@@ -1898,9 +2683,10 @@
       var tag = vis + (type === "ARCHIVED" ? " [ARCHIVED]" : (type === "FORK" ? " [FORK]" : ""));
 
       return {
-        id: r.name,
+        id: String(key).replace(/\//g, "--"),
         name: r.name,
-        fullName: r.full_name,
+        fullName: key,
+        owner: (r.owner && r.owner.login) || String(key).split("/")[0],
         url: r.html_url,
         vis: vis,
         type: type,
@@ -1923,6 +2709,8 @@
         spanPct: Math.max(4, 100 - startPct),
         totalCommits: total,
         size: r.size,
+        topics: r.topics || [],
+        license: r.license && r.license.spdx_id ? r.license.spdx_id : null,
         bars: bars,
         latestCommit: dates.length ? "Latest indexed commit · " + dates.length + " in scan" : "No commits indexed",
         latestHash: "",
@@ -1950,6 +2738,7 @@
             id: "c-" + c.sha,
             time: hhmm(c.date),
             repo: c.repo,
+            repoFullName: c.repoFullName || c.repo,
             branch: c.branch,
             type: (c.msg.match(/^(\w+)(\(|:)/) || [, "other"])[1].toLowerCase(),
             hash: c.sha,
@@ -1961,7 +2750,7 @@
             isLatest: i === 0 && c === byDay[k][0],
             diffFile: "",
             diffLines: null,
-            url: "https://github.com/" + c.repo
+            url: "https://github.com/" + (c.repoFullName || c.repo)
           };
         })
       };
@@ -2091,8 +2880,20 @@
 
     state.username = payload.username;
     state.payload = payload;
-    if (!state.selectedRepoId && REPOSITORIES.length) state.selectedRepoId = REPOSITORIES[0].id;
-    if (!state.expandedRepoId && REPOSITORIES.length > 1) state.expandedRepoId = REPOSITORIES[1].id;
+    state.privateCount = payload.privateRepos || 0;
+    if (state.mode !== "public" && REPOSITORIES.length) {
+      state.visibleRepoLimit = Math.min(REPOSITORIES.length, 100);
+    }
+    if (!REPOSITORIES.some(function (r) { return r.id === state.selectedRepoId; })) {
+      state.selectedRepoId = REPOSITORIES.length ? REPOSITORIES[0].id : null;
+    }
+    if (!REPOSITORIES.some(function (r) { return r.id === state.expandedRepoId; })) {
+      state.expandedRepoId = REPOSITORIES.length > 1 ? REPOSITORIES[1].id : null;
+    }
+    if (state.globalRepoFilter && !REPOSITORIES.some(function (r) { return r.fullName === state.globalRepoFilter; })) {
+      state.globalRepoFilter = null;
+    }
+    renderAccountDossier();
   }
 
   // =========================================================================
@@ -2109,6 +2910,17 @@
       var icon = document.getElementById("header-avatar-icon");
       if (icon && icon.tagName === "SPAN") {
         icon.outerHTML = '<img id="header-avatar-icon" src="' + escapeHtml(PROFILE.avatar_url) + '" alt="@' + escapeHtml(state.username) + '" class="w-full h-full object-cover">';
+      }
+    }
+    var badge = document.getElementById("header-auth-badge");
+    if (badge) {
+      var authed = state.mode !== "public" && (!!state.auth || !!state.token);
+      badge.classList.toggle("hidden", !authed);
+      if (authed) {
+        badge.textContent = state.mode === "server" ? "private" : "token";
+        badge.title = state.mode === "server"
+          ? "OAuth session — private repositories included"
+          : "Token session — private repositories included";
       }
     }
     setText("sync-label", "Synced " + relTime(new Date(PROFILE ? Date.now() : Date.now())));
@@ -2212,7 +3024,7 @@
     if (!commit) { box.innerHTML = '<div class="text-on-surface-variant">No commits indexed for this account yet.</div>'; return; }
     box.innerHTML = '<div class="text-on-surface-variant">Fetching patch for ' + escapeHtml(commit.sha) + '…</div>';
     try {
-      var d = await gh("/repos/" + encodeURIComponent(state.username) + "/" + encodeURIComponent(commit.repo) + "/commits/" + commit.fullSha);
+      var d = await gh("/repos/" + repoApiPath(commit.repoFullName || commit.repo) + "/commits/" + commit.fullSha);
       commit.filesCount = d.files ? d.files.length : 0;
       commit.add = d.stats ? d.stats.additions : 0;
       commit.del = d.stats ? d.stats.deletions : 0;
@@ -2320,8 +3132,9 @@
     var html = "";
     focusList.forEach(function (item) {
       var isMuted = !!item.muted;
-      var isActive = state.globalRepoFilter === item.repo;
-      html += '<div class="focus-bar-row cursor-pointer group" data-repo="' + escapeHtml(item.repo) + '">' +
+      var key = item.fullName || item.repo;
+      var isActive = state.globalRepoFilter === key;
+      html += '<div class="focus-bar-row cursor-pointer group" data-repo="' + escapeHtml(key) + '">' +
         '<div class="flex justify-between font-mono-data text-body-sm mb-1.5">' +
         '<span class="' + (isActive ? "text-secondary font-bold underline" : (isMuted ? "text-on-surface-variant" : "text-on-surface font-medium group-hover:text-secondary")) + ' transition-colors">' + escapeHtml(item.repo) + '</span>' +
         '<span class="' + (isMuted ? "text-on-surface-variant font-medium" : "text-on-surface font-semibold") + ' tabular-nums">' + item.count + '</span>' +
@@ -2570,8 +3383,8 @@
     var sort = document.getElementById("filter-sort").value;
 
     var list = REPOSITORIES.filter(function (r) {
-      if (state.globalRepoFilter && r.name !== state.globalRepoFilter) return false;
-      if (q && r.name.toLowerCase().indexOf(q) === -1 && r.desc.toLowerCase().indexOf(q) === -1 && r.lang.toLowerCase().indexOf(q) === -1) return false;
+      if (state.globalRepoFilter && r.fullName !== state.globalRepoFilter && r.name !== state.globalRepoFilter) return false;
+      if (q && r.name.toLowerCase().indexOf(q) === -1 && r.fullName.toLowerCase().indexOf(q) === -1 && r.desc.toLowerCase().indexOf(q) === -1 && r.lang.toLowerCase().indexOf(q) === -1) return false;
       if (lang !== "ALL" && r.lang !== lang) return false;
       if (type !== "ALL" && r.type !== type) return false;
       if (vis !== "ALL" && r.vis !== vis) return false;
@@ -2623,7 +3436,10 @@
 
       html += '<tr class="repo-row cursor-pointer transition-colors ' + rowCls + ' ' + (r.mutedRow ? "text-on-surface-variant" : "text-on-surface") + '" data-repo-id="' + escapeHtml(r.id) + '" id="repo-' + escapeHtml(r.id) + '">' +
         '<td class="py-3 px-3 font-mono-data font-semibold text-on-surface whitespace-nowrap">' +
-          '<a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener" class="hover:text-secondary">' + escapeHtml(r.name) + '</a>' +
+          (r.owner && r.owner.toLowerCase() !== String(state.username).toLowerCase()
+            ? '<span class="block font-label-mono text-[9px] font-normal text-on-surface-variant normal-case tracking-normal">' + escapeHtml(r.owner) + '/</span>'
+            : '') +
+          '<a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener" class="hover:text-secondary" title="' + escapeHtml(r.fullName) + '">' + escapeHtml(r.name) + '</a>' +
           '<span class="ml-2 font-label-mono text-[9px] text-on-surface-variant border border-outline-variant/60 px-1 uppercase">' + escapeHtml(r.tagLabel) + '</span>' +
         '</td>' +
         '<td class="py-3 px-3 text-on-surface-variant">' + escapeHtml(r.desc) + '</td>' +
@@ -2639,10 +3455,12 @@
       if (isExpanded) {
         html += '<tr class="bg-surface-container border-b border-outline-variant/40"><td colspan="8" class="px-3 py-2.5 text-[11px] font-mono-data text-on-surface-variant">' +
           '<div class="flex flex-wrap items-center justify-between gap-2"><div class="flex items-center space-x-2">' +
-            '<span class="text-on-surface font-medium">branch:</span><span>' + escapeHtml(r.defaultBranch) + '</span>' +
+            '<span class="text-on-surface font-medium">repo:</span><span>' + escapeHtml(r.fullName) + '</span>' +
+            '<span class="text-outline-variant">·</span><span class="text-on-surface font-medium">branch:</span><span>' + escapeHtml(r.defaultBranch) + '</span>' +
             '<span class="text-outline-variant">·</span><span>' + r.totalCommits + ' commits indexed</span>' +
             '<span class="text-outline-variant">·</span><span>created ' + r.createdYear + '</span>' +
             '<span class="text-outline-variant">·</span><span>size ' + r.size + ' KB</span>' +
+            (r.license ? '<span class="text-outline-variant">·</span><span>' + escapeHtml(r.license) + '</span>' : '') +
           '</div><div class="flex items-center space-x-2">' +
             '<a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener" class="px-2 py-0.5 border border-outline-variant/80 hover:border-primary font-label-mono text-[10px] uppercase">Open on GitHub ↗</a>' +
             '<button type="button" class="btn-open-folio px-2 py-0.5 bg-primary text-surface hover:bg-secondary font-label-mono text-[10px] uppercase" data-repo="' + escapeHtml(r.id) + '">[ Inspect Files ]</button>' +
@@ -2712,9 +3530,14 @@
     var pushSel = document.getElementById("push-repo-select");
     if (pushSel) {
       var names = {};
-      (state.payload ? state.payload.commits : []).forEach(function (c) { names[c.repo] = 1; });
+      (state.payload ? state.payload.commits : []).forEach(function (c) {
+        var key = c.repoFullName || c.repo;
+        names[key] = c.repo;
+      });
       var po = '<option value="ALL">All repositories ▾</option>';
-      Object.keys(names).sort().forEach(function (n) { po += '<option value="' + escapeHtml(n) + '">' + escapeHtml(n) + '</option>'; });
+      Object.keys(names).sort().forEach(function (n) {
+        po += '<option value="' + escapeHtml(n) + '">' + escapeHtml(names[n]) + '</option>';
+      });
       pushSel.innerHTML = po;
     }
 
@@ -2909,7 +3732,7 @@
 
     days.forEach(function (dayGroup) {
       var commits = dayGroup.commits.filter(function (c) {
-        if (state.pushRepoFilter !== "ALL" && c.repo !== state.pushRepoFilter) return false;
+        if (state.pushRepoFilter !== "ALL" && c.repoFullName !== state.pushRepoFilter && c.repo !== state.pushRepoFilter) return false;
         if (state.pushTypeFilter !== "ALL" && c.type !== state.pushTypeFilter) return false;
         return true;
       });
@@ -2939,9 +3762,9 @@
         if (isExp) {
           html += '<div class="my-2 bg-surface-container-low border border-outline-variant/50 p-3 font-mono-data text-[11px]"><div class="flex items-center justify-between pb-2 mb-2 border-b border-outline-variant/30 text-on-surface-variant">' +
             '<span>SHA: <strong class="text-on-surface">' + escapeHtml(c.fullSha || c.hash) + '</strong></span>' +
-            '<div class="flex items-center space-x-3"><a href="https://github.com/' + escapeHtml(state.username) + '/' + escapeHtml(c.repo) + '/commit/' + escapeHtml(c.fullSha) + '" target="_blank" rel="noopener" class="underline hover:text-secondary uppercase text-[10px]">Open on GitHub ↗</a>' +
+            '<div class="flex items-center space-x-3"><a href="https://github.com/' + escapeHtml(c.repoFullName || c.repo) + '/commit/' + escapeHtml(c.fullSha) + '" target="_blank" rel="noopener" class="underline hover:text-secondary uppercase text-[10px]">Open on GitHub ↗</a>' +
             '<button type="button" class="btn-copy-sha underline hover:text-secondary uppercase text-[10px]" data-sha="' + escapeHtml(c.fullSha || c.hash) + '">Copy SHA</button></div></div>' +
-            '<div class="patch-box space-y-0.5 overflow-x-auto text-on-surface-variant" data-sha="' + escapeHtml(c.fullSha) + '" data-repo="' + escapeHtml(c.repo) + '">Loading patch…</div></div>';
+            '<div class="patch-box space-y-0.5 overflow-x-auto text-on-surface-variant" data-sha="' + escapeHtml(c.fullSha) + '" data-repo="' + escapeHtml(c.repoFullName || c.repo) + '">Loading patch…</div></div>';
         }
         html += '</div>';
       });
@@ -2970,7 +3793,7 @@
       loadPatchInto(box, box.getAttribute("data-repo"), box.getAttribute("data-sha"));
     });
 
-    setText("push-log-archive-count", SUMMARY.commits + " commits indexed live from github.com/" + state.username + " · " + REPOSITORIES.length + " repositories scanned");
+    setText("push-log-archive-count", SUMMARY.commits + " commits indexed live from github.com/" + state.username + " · " + REPOSITORIES.length + " repositories scanned" + (state.privateCount ? " · " + state.privateCount + " private" : ""));
   }
 
   async function loadPatchInto(box, repo, sha) {
@@ -2978,7 +3801,7 @@
     var key = repo + "@" + sha;
     if (state.patchCache[key]) { paintPatch(box, state.patchCache[key]); return; }
     try {
-      var d = await gh("/repos/" + encodeURIComponent(state.username) + "/" + encodeURIComponent(repo) + "/commits/" + sha);
+      var d = await gh("/repos/" + repoApiPath(repo) + "/commits/" + sha);
       state.patchCache[key] = d.files || [];
       paintPatch(box, d.files || []);
     } catch (e) {
@@ -3004,18 +3827,27 @@
     box.innerHTML = out;
   }
 
-  function setGlobalRepoFilter(repoName) {
-    state.globalRepoFilter = repoName;
+  function resolveRepo(value) {
+    if (!value) return null;
+    return REPOSITORIES.find(function (r) {
+      return r.fullName === value || r.name === value || r.id === value;
+    }) || null;
+  }
+
+  function setGlobalRepoFilter(value) {
+    var repo = resolveRepo(value);
+    var key = repo ? repo.fullName : value;
+    state.globalRepoFilter = key || null;
     var banner = document.getElementById("active-filter-banner");
     var bannerText = document.getElementById("active-filter-text");
     var sel = document.getElementById("push-repo-select");
-    if (repoName) {
+    if (key) {
       banner.classList.remove("hidden");
-      bannerText.textContent = "Repository = " + repoName;
-      if (sel) sel.value = repoName;
-      state.pushRepoFilter = repoName;
-      state.selectedRepoId = repoName;
-      showToast("FILTERED LEDGER TO " + repoName.toUpperCase());
+      bannerText.textContent = "Repository = " + (repo ? repo.fullName : key);
+      if (sel) sel.value = key;
+      state.pushRepoFilter = key;
+      if (repo) state.selectedRepoId = repo.id;
+      showToast("FILTERED LEDGER TO " + String(repo ? repo.fullName : key).toUpperCase());
     } else {
       banner.classList.add("hidden");
       if (sel) sel.value = "ALL";
@@ -3045,6 +3877,13 @@
       document.getElementById("cmd-input").value = "";
       renderCommandResults("");
       setTimeout(function () { document.getElementById("cmd-input").focus(); }, 20);
+    }
+    if (id === "profile-modal") {
+      renderAccountDossier();
+      var liveInput = document.getElementById("github-live-input");
+      if (liveInput) liveInput.value = state.username || DEFAULT_USER;
+      var status = document.getElementById("github-fetch-status");
+      if (status) status.textContent = "Endpoints used: /user · /user/repos · /repos/:owner/:repo/commits · /repos/:owner/:repo/languages · /search/issues";
     }
   }
 
@@ -3148,22 +3987,50 @@
     el.classList.remove("hidden");
     var tone = kind === "error" ? "bg-secondary" : (kind === "warn" ? "bg-primary" : "bg-primary");
     el.className = "w-full " + tone + " text-surface border-t border-outline-variant/40";
+    var canAuthorize = !!(state.authProbe && (state.authProbe.oauthConfigured || state.authProbe.localAvailable));
     el.innerHTML = '<div class="max-w-[1360px] mx-auto px-margin md:px-margin-desktop py-1.5 flex flex-wrap items-center justify-between gap-2 font-label-mono text-label-mono">' +
       '<div class="flex items-center space-x-2"><span class="w-2 h-2 bg-surface inline-block"></span><span>' + escapeHtml(text) + '</span></div>' +
       '<button type="button" id="data-status-action" class="px-2 py-0.5 border border-surface/40 hover:bg-surface hover:text-primary uppercase transition-colors">' +
-      (kind === "error" ? "Add token / reload" : "Refresh") + '</button></div>';
+      (kind === "error" ? (canAuthorize ? "Authorize session" : "Add token / reload") : "Refresh") + '</button></div>';
     var btn = document.getElementById("data-status-action");
     if (btn) btn.addEventListener("click", function () {
-      if (kind === "error") openModal("profile-modal");
-      else reloadAccount(state.username, true);
+      if (kind !== "error") return reloadAccount(state.username, true);
+      if (canAuthorize) { showAuthGate(state.authProbe); return; }
+      openModal("profile-modal");
     });
+  }
+
+  function readCache(maxAgeMs) {
+    // Private payloads are intentionally never persisted. localStorage is only
+    // used for public telemetry, where there is nothing sensitive to leak.
+    if (state.mode !== "public") return null;
+    try {
+      var c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+      if (!c || c.username !== state.username || !c.commits) return null;
+      if (maxAgeMs != null && (Date.now() - c.fetchedAt) > maxAgeMs) return null;
+      c.commits = c.commits.map(function (x) { x.date = new Date(x.iso); return x; });
+      return c;
+    } catch (e) { return null; }
   }
 
   async function reloadAccount(username, force) {
     if (state.loading) return;
     state.loading = true;
     state.error = null;
-    state.username = username || DEFAULT_USER;
+    var requested = String(username || (state.auth && state.auth.login) || DEFAULT_USER).trim();
+
+    // If the requested handle is not the authenticated account, show that
+    // handle's public ledger. Switching back restores the private session.
+    if (state.auth && state.auth.login) {
+      var isOwn = requested.toLowerCase() === String(state.auth.login).toLowerCase();
+      if (isOwn) {
+        state.mode = state.auth.mode === "token" ? "token" : "server";
+      } else {
+        state.mode = "public";
+      }
+    }
+    state.username = requested;
+
     setStatusBanner("info", "Fetching live telemetry from github.com/" + state.username + "…");
     var icon = document.getElementById("sync-icon");
     if (icon) icon.classList.add("animate-spin");
@@ -3171,28 +4038,41 @@
     if (label) label.textContent = "Syncing…";
 
     try {
-      var payload = null;
-      if (!force) {
-        try {
-          var cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
-          if (cached && cached.username === state.username && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS && cached.commits) {
-            cached.commits = cached.commits.map(function (c) { c.date = new Date(c.iso); return c; });
-            payload = cached;
-          }
-        } catch (e) {}
-      }
+      var payload = force ? null : readCache(CACHE_TTL_MS);
       if (!payload) {
         payload = await fetchAccount(state.username);
-        try { localStorage.setItem(CACHE_KEY, JSON.stringify(payload)); } catch (e) {}
+        if (!payload.partial && state.mode === "public") {
+          try { localStorage.setItem(CACHE_KEY, JSON.stringify(payload)); } catch (e) {}
+        }
       }
+      state.privateCount = payload.privateRepos || 0;
       hydrate(payload);
       bootRender();
-      setStatusBanner(null);
+      if (payload.partial) {
+        setStatusBanner("warn", "Partial data — " + payload.failedRepos + " repositories could not be scanned (empty, inaccessible, or rate-limited). Totals may be incomplete; add a token for the full history.");
+      } else {
+        setStatusBanner(null);
+      }
       if (label) label.textContent = "Synced " + relTime(new Date(payload.fetchedAt || Date.now()));
-      showToast("LOADED @" + state.username.toUpperCase() + " · " + SUMMARY.commits + " COMMITS · " + REPOSITORIES.length + " REPOS");
+      showToast("LOADED @" + state.username.toUpperCase() + " · " + SUMMARY.commits + " COMMITS · " + REPOSITORIES.length + " REPOS" + (state.privateCount ? " · " + state.privateCount + " PRIVATE" : ""));
     } catch (e) {
       state.error = e;
-      if (e.code === "RATE_LIMIT") {
+      var stale = readCache(null);
+      if (stale) {
+        hydrate(stale);
+        bootRender();
+        setStatusBanner("warn", "Live sync blocked — showing cached public snapshot from " + new Date(stale.fetchedAt).toLocaleString() + ". Press Refresh or add a token.");
+        showToast("OFFLINE — CACHED GITHUB SNAPSHOT");
+        return;
+      }
+      if (e.code === "AUTH_REQUIRED") {
+        state.auth = null;
+        state.mode = "public";
+        state.token = "";
+        clearStoredToken();
+        showAuthGate(state.authProbe, "GITHUB AUTHORIZATION EXPIRED · AUTHORIZE AGAIN TO RELOAD PRIVATE DATA");
+        setStatusBanner("error", "GitHub authorization expired. Authorize again from the access gate.");
+      } else if (e.code === "RATE_LIMIT") {
         setStatusBanner("error", "GitHub API rate limit reached. Add a personal access token to continue (60 → 5,000 req/hr).");
       } else if (e.code === "NOT_FOUND") {
         setStatusBanner("error", "GitHub user \"" + state.username + "\" was not found.");
@@ -3221,10 +4101,10 @@
     renderRepositories();
     renderLanguages();
     renderPushLog();
-    setText("footer-status-text", "LIVE · @" + state.username);
+    setText("footer-status-text", "LIVE · @" + state.username + (state.privateCount ? " · PRIVATE ACCESS" : " · PUBLIC"));
     setText("hero-repo-link", HERO_COMMITS[0] ? HERO_COMMITS[0].repo : "—");
     var footer = document.querySelector("footer p");
-    if (footer) footer.textContent = "LOGBOOK · LIVE FROM GITHUB.COM/" + state.username.toUpperCase() + " · " + SUMMARY.commits + " COMMITS · " + REPOSITORIES.length + " REPOSITORIES · TABULAR REVISION 4.12";
+    if (footer) footer.textContent = "LOGBOOK · LIVE FROM GITHUB.COM/" + state.username.toUpperCase() + " · " + SUMMARY.commits + " COMMITS · " + REPOSITORIES.length + " REPOSITORIES" + (state.privateCount ? " (" + state.privateCount + " PRIVATE)" : "") + " · TABULAR REVISION 4.13";
   }
 
   // =========================================================================
@@ -3451,14 +4331,27 @@
       if (e.key === "Enter") document.getElementById("btn-fetch-github-live").click();
     });
     var tokenBtn = document.getElementById("btn-save-token");
-    if (tokenBtn) tokenBtn.addEventListener("click", function () {
-      var t = (document.getElementById("github-token-input").value || "").trim();
-      state.token = t;
-      try { sessionStorage.setItem("logbook:token", t); } catch (e) {}
-      closeAllModals();
-      showToast(t ? "TOKEN ACTIVE · 5,000 REQ/HR" : "TOKEN CLEARED");
-      reloadAccount(state.username, true);
+    if (tokenBtn) tokenBtn.addEventListener("click", function () { applyTokenFromProfile(); });
+
+    document.getElementById("btn-sign-out").addEventListener("click", function () { signOut(); });
+
+    // Authorization gate controls
+    document.getElementById("btn-authorize-github").addEventListener("click", function () { authorizePrimary(); });
+    document.getElementById("btn-auth-token").addEventListener("click", function () {
+      var panel = document.getElementById("auth-token-panel");
+      if (!panel) return;
+      var isHidden = panel.classList.toggle("hidden");
+      if (!isHidden) {
+        var field = document.getElementById("auth-token-input");
+        if (field) setTimeout(function () { field.focus(); }, 20);
+      }
     });
+    document.getElementById("btn-auth-token-apply").addEventListener("click", function () { applyTokenFromGate(); });
+    document.getElementById("btn-auth-local").addEventListener("click", function () { authorizeLocalSession(); });
+    document.getElementById("auth-token-input").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); applyTokenFromGate(); }
+    });
+    document.getElementById("btn-auth-public").addEventListener("click", function () { authorizePublicMode(); });
 
     document.getElementById("btn-shortcuts").addEventListener("click", function () { openModal("shortcuts-modal"); });
     document.getElementById("btn-close-shortcuts").addEventListener("click", closeAllModals);
@@ -3471,6 +4364,8 @@
 
     // Keyboard
     document.addEventListener("keydown", function (e) {
+      var gateEl = document.getElementById("auth-gate");
+      if (gateEl && !gateEl.classList.contains("hidden")) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openModal("cmd-palette-modal"); return; }
       if (e.key === "Escape") { closeAllModals(); if (state.globalRepoFilter) setGlobalRepoFilter(null); return; }
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
@@ -3516,13 +4411,10 @@
       });
     }, { passive: true });
 
-    // Restore token for the tab session
-    try { state.token = sessionStorage.getItem("logbook:token") || ""; } catch (e) {}
-
     initKpiSparklineScrubbing();
 
-    // Boot: load the real account
-    reloadAccount(DEFAULT_USER, false);
+    // Boot: ask for GitHub authorization before fetching any account data.
+    bootAuth();
   }
 
   function toggleRepoViewMode(mode) {

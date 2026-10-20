@@ -11,6 +11,10 @@ Desktop.ini
 # Logs
 *.log
 
-# Node (if tooling is added later)
+# Node
 node_modules/
 npm-debug.log*
+
+# Local secrets / auth bridge
+.env
+.env.local
