@@ -23,6 +23,7 @@ const { SnapshotStore } = require("./snapshot-store");
 const { SessionStore } = require("./session-store");
 const { SyncEngine } = require("./sync-engine");
 const commitEngine = require("./commit-engine");
+const commitAiEngine = require("./commit-ai-engine");
 const releaseNotesEngine = require("./release-notes-engine");
 const dependencyScanner = require("./dependency-scanner");
 const {
@@ -98,6 +99,7 @@ const exportLimiter = new RateLimiter({ windowMs: 60_000, max: 10 });
 const commitBrowseLimiter = new RateLimiter({ windowMs: 60_000, max: 120 });
 const commitScanLimiter = new RateLimiter({ windowMs: 60_000, max: 20 });
 const commitRunLimiter = new RateLimiter({ windowMs: 60_000, max: 6 });
+const commitAiLimiter = new RateLimiter({ windowMs: 60_000, max: 20 });
 
 /** @type {Map<string, {verifier:string, expectedLogin:string, returnTo:string, createdAt:number}>} */
 const pendingOAuth = new Map();
@@ -282,6 +284,38 @@ async function handle(req, res) {
 
   if (pathname === "/api/commit/run" && req.method === "POST") {
     return runCommitNow(req, res);
+  }
+
+  if (pathname === "/api/commit/suggest" && req.method === "POST") {
+    return suggestCommitMessage(req, res);
+  }
+
+  if (pathname === "/api/commit/ai-status" && req.method === "GET") {
+    return getCommitAiStatus(req, res);
+  }
+
+  if (pathname === "/api/commit/undo" && req.method === "POST") {
+    return undoCommitNow(req, res);
+  }
+
+  if (pathname === "/api/commit/stash" && req.method === "POST") {
+    return stashWorkspaceRepos(req, res);
+  }
+
+  if (pathname === "/api/release-notes" && req.method === "POST") {
+    return generateReleaseNotes(req, res);
+  }
+
+  if (pathname === "/api/dependencies/scan" && req.method === "POST") {
+    return scanWorkspaceDependencies(req, res);
+  }
+
+  if (pathname === "/api/backup/export" && req.method === "POST") {
+    return exportEncryptedBackup(req, res);
+  }
+
+  if (pathname === "/api/backup/import" && req.method === "POST") {
+    return importEncryptedBackup(req, res);
   }
 
   if (pathname === "/api/export" && req.method === "GET") {
@@ -701,6 +735,83 @@ async function runCommitNow(req, res) {
     commitRunLock = null;
     if (!res.writableEnded) res.end();
   }
+}
+
+async function resolveSelectedCommitRepos(root, paths) {
+  const rootCheck = await commitEngine.resolveDirectory(root);
+  if (!rootCheck.ok) return { ok: false, rootCheck, selected: [] };
+  const selected = [];
+  for (const value of paths.slice(0, 200)) {
+    if (typeof value !== "string" || !path.isAbsolute(value)) continue;
+    let resolved;
+    try {
+      resolved = await fs.promises.realpath(path.resolve(value));
+    } catch (error) {
+      continue;
+    }
+    if (!commitEngine.isPathInside(rootCheck.path, resolved)) continue;
+    if (!fs.existsSync(path.join(resolved, ".git"))) continue;
+    if (selected.some((existing) => commitEngine.samePath(existing, resolved))) continue;
+    selected.push(resolved);
+  }
+  return { ok: selected.length > 0, rootCheck, selected };
+}
+
+async function suggestCommitMessage(req, res) {
+  const session = commitFeatureGuard(req, res, { csrf: true });
+  if (!session) return;
+  if (!commitRateGuard(req, res, commitAiLimiter, session)) return;
+  let body;
+  try {
+    body = await readJsonBody(req, res);
+  } catch (error) {
+    return sendJson(res, error.status || 400, { error: error.code || "bad_request" });
+  }
+  const root = body && body.root;
+  const paths = body && Array.isArray(body.paths) ? body.paths : [];
+  if (typeof root !== "string" || !root.trim() || !paths.length) {
+    return sendJson(res, 400, { error: "invalid_repos", message: "Select at least one repository before requesting suggestions." });
+  }
+  const resolved = await resolveSelectedCommitRepos(root, paths);
+  if (!resolved.rootCheck.ok) {
+    return sendJson(res, resolved.rootCheck.error === "not_found" ? 404 : 400, {
+      error: resolved.rootCheck.error,
+      message: commitErrorMessage(resolved.rootCheck.error)
+    });
+  }
+  if (!resolved.selected.length) {
+    return sendJson(res, 400, {
+      error: "no_valid_repos",
+      message: "None of the selected folders are Git repositories under that root."
+    });
+  }
+  try {
+    const result = await commitAiEngine.suggestCommitMessages(resolved.selected, {
+      allowCloud: process.env.ALLOW_CLOUD_AI === "1"
+    });
+    audit("commit_ai_suggest", session, {
+      req,
+      detail: JSON.stringify({ provider: result.provider, model: result.model || null, repositories: resolved.selected.length })
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      provider: result.provider,
+      model: result.model,
+      offline: result.provider !== "gemini",
+      suggestions: result.suggestions
+    });
+  } catch (error) {
+    console.error("[logbook] commit suggestions failed:", error && error.message ? error.message : error);
+    return sendJson(res, 500, { error: "suggestion_failed", message: "Commit suggestions could not be generated." });
+  }
+}
+
+async function getCommitAiStatus(req, res) {
+  const session = commitFeatureGuard(req, res);
+  if (!session) return;
+  if (!commitRateGuard(req, res, commitAiLimiter, session)) return;
+  const status = await commitAiEngine.getLocalAiStatus({ timeoutMs: 1_200 });
+  return sendJson(res, 200, status);
 }
 
 function exportAccount(req, res) {
@@ -1559,6 +1670,27 @@ async function importEncryptedBackup(req, res) {
   return sendJson(res, 200, { ok: true });
 }
 
+
+async function undoCommitNow(req, res) {
+  const session = commitFeatureGuard(req, res, { csrf: true });
+  if (!session) return;
+  let body;
+  try {
+    body = await readJsonBody(req, res);
+  } catch (e) {
+    body = {};
+  }
+  const repoPath = body && body.path;
+  if (typeof repoPath !== "string" || !path.isAbsolute(repoPath) || !fs.existsSync(path.join(repoPath, ".git"))) {
+    return sendJson(res, 400, { error: "invalid_path", message: "Valid repository path required." });
+  }
+  const result = await commitEngine.undoLastCommit(repoPath);
+  if (!result.ok) {
+    return sendJson(res, 400, { error: "undo_failed", message: result.error || "Undo operation failed." });
+  }
+  audit("commit_undo", session, { req, detail: repoPath });
+  return sendJson(res, 200, { ok: true, path: repoPath });
+}
 async function stashWorkspaceRepos(req, res) {
   const session = commitFeatureGuard(req, res, { csrf: true });
   if (!session) return;

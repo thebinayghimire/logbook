@@ -936,5 +936,28 @@ async function undoLastCommit(repoPath) {
   }
   return { ok: true };
 }
+
+module.exports = {
+  DEFAULT_MAX_DEPTH,
+  defaultCommitMessage,
+  formatTimestamp,
+  inspectRepo,
+  isLikelySecret,
+  isPathInside,
+  listDirectories,
+  normalizeCommitMessage,
+  normalizeUserPath,
+  parseStatus,
+  remoteLabel,
+  resolveDirectory,
+  runCommit,
+  runCommits,
+  runGit,
+  samePath,
+  sanitizeGitOutput,
+  scanProjects,
+  skipReasonLabel,
+  summarize,
   undoLastCommit
 };
+

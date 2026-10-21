@@ -227,6 +227,140 @@
     .sync-sweep {
       animation: sweep-line 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
     }
+
+    /* Commit Now: progress button */
+    #btn-commit-run {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.35rem;
+      min-width: 10.75rem;
+      overflow: hidden;
+      isolation: isolate;
+      transition: background-color 0.22s ease, color 0.22s ease, transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s ease;
+    }
+    #btn-commit-run:active:not(:disabled) {
+      transform: scale(0.975);
+    }
+    #btn-commit-run[data-commit-run-state="running"]:disabled {
+      opacity: 1;
+      cursor: progress;
+    }
+    #btn-commit-run[data-commit-run-state="running"]:hover {
+      background-color: var(--c-primary);
+    }
+    #btn-commit-run .commit-run-label {
+      position: relative;
+      z-index: 1;
+      white-space: nowrap;
+    }
+    #btn-commit-run .commit-run-label.is-swapping {
+      animation: commit-label-swap 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes commit-label-swap {
+      0% { opacity: 0.15; transform: translateY(3px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    #btn-commit-run .commit-run-check {
+      width: 0;
+      overflow: hidden;
+      opacity: 0;
+      font-size: 14px;
+      line-height: 1;
+      transform: scale(0.55) rotate(-18deg);
+      transition: width 0.24s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.18s ease, transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    #btn-commit-run[data-commit-run-state="success"] .commit-run-check {
+      width: 14px;
+      opacity: 1;
+      transform: scale(1) rotate(0);
+    }
+    #btn-commit-run .commit-run-rail {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 2px;
+      z-index: 2;
+      opacity: 0;
+      transform: scaleX(0.82);
+      transform-origin: left;
+      transition: opacity 0.18s ease, transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    #btn-commit-run[data-commit-run-state="running"] .commit-run-rail,
+    #btn-commit-run[data-commit-run-state="success"] .commit-run-rail {
+      opacity: 1;
+      transform: scaleX(1);
+    }
+    #btn-commit-run .commit-run-rail::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: currentColor;
+      opacity: 0.18;
+    }
+    #btn-commit-run .commit-run-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--commit-progress, 0%);
+      z-index: 1;
+      background: var(--c-secondary);
+      transition: width 0.56s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.24s ease;
+    }
+    #btn-commit-run .commit-run-fill::after {
+      content: "";
+      position: absolute;
+      right: -2px;
+      top: -1px;
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--c-surface);
+      box-shadow: 0 0 8px var(--c-secondary);
+      opacity: 0;
+      transition: opacity 0.16s ease;
+    }
+    #btn-commit-run[data-commit-run-state="running"] .commit-run-fill::after {
+      opacity: 1;
+    }
+    #btn-commit-run .commit-run-rail::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 34%;
+      z-index: 3;
+      background: linear-gradient(90deg, transparent, var(--c-surface), transparent);
+      opacity: 0;
+    }
+    #btn-commit-run[data-commit-run-state="running"] .commit-run-rail::after {
+      animation: commit-run-glint 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    }
+    @keyframes commit-run-glint {
+      0% { transform: translateX(-140%); opacity: 0; }
+      18% { opacity: 0.55; }
+      82% { opacity: 0.55; }
+      100% { transform: translateX(390%); opacity: 0; }
+    }
+    #btn-commit-run[data-commit-run-state="success"] {
+      background-color: #2E7D6B;
+      color: #fff;
+      animation: commit-success-glow 0.72s cubic-bezier(0.16, 1, 0.3, 1) 1;
+    }
+    #btn-commit-run[data-commit-run-state="success"]:hover {
+      background-color: #256A5A;
+    }
+    #btn-commit-run[data-commit-run-state="success"] .commit-run-fill {
+      background: #fff;
+    }
+    #btn-commit-run[data-commit-run-state="success"] .commit-run-fill::after {
+      opacity: 0;
+    }
+    @keyframes commit-success-glow {
+      0% { box-shadow: 0 0 0 0 rgba(46, 125, 107, 0.34); }
+      100% { box-shadow: 0 0 0 10px rgba(46, 125, 107, 0); }
+    }
     .tabular-nums {
       font-variant-numeric: tabular-nums;
     }
@@ -968,6 +1102,34 @@
             </div>
           </div>
         </div>
+
+        <!-- PRODUCTIVITY CLOCK -->
+        <div class="mt-10 pt-6 border-t border-outline-variant/40">
+          <div class="mb-6">
+            <h3 class="font-label-mono-bold text-label-mono-bold uppercase tracking-widest text-on-surface mb-1">Productivity Clock</h3>
+            <p class="font-body-sm text-body-sm text-on-surface-variant">Your coding rhythm across 24 hours — generated from commit telemetry</p>
+          </div>
+          <div class="flex flex-col xl:flex-row gap-6">
+            <!-- Radial Clock SVG -->
+            <div class="flex-1 border border-outline-variant/60 p-6 flex flex-col items-center">
+              <div class="font-label-mono text-[10px] uppercase tracking-wider text-on-surface-variant mb-4">24-Hour Activity Radial</div>
+              <div class="w-full flex justify-center">
+                <svg id="radial-clock-svg" viewBox="0 0 300 300" class="w-full max-w-[280px] h-auto"></svg>
+              </div>
+              <div class="flex justify-between w-full max-w-[280px] mt-3 font-label-mono text-[9px] text-on-surface-variant">
+                <span>00h</span><span>06h</span><span>12h</span><span>18h</span><span>24h</span>
+              </div>
+            </div>
+            <!-- Hourly Bar Chart -->
+            <div class="flex-1 border border-outline-variant/60 p-6">
+              <div class="font-label-mono text-[10px] uppercase tracking-wider text-on-surface-variant mb-4">Hourly Commit Frequency</div>
+              <div class="flex items-end justify-between gap-1 h-40" id="hourly-bars-container"></div>
+              <div class="flex justify-between mt-2 font-label-mono text-[9px] text-on-surface-variant">
+                <span>00</span><span>04</span><span>08</span><span>12</span><span>16</span><span>20</span><span>24</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- =========================================================================
@@ -1496,7 +1658,10 @@
             <div class="flex gap-2">
               <input class="flex-1 bg-surface border border-outline-variant/70 px-2.5 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="commit-message-input" type="text" placeholder="chore: checkpoint ..."/>
               <button class="border border-outline-variant/70 px-2.5 py-1.5 font-label-mono text-[9px] uppercase hover:border-primary hover:text-on-surface transition-colors whitespace-nowrap bg-surface" id="btn-commit-timestamp" type="button">Timestamp</button>
+              <button class="border border-secondary/70 px-2.5 py-1.5 font-label-mono text-[9px] uppercase hover:bg-secondary hover:text-surface transition-colors whitespace-nowrap bg-surface disabled:opacity-40 disabled:cursor-not-allowed" disabled id="btn-commit-ai-suggest" type="button">AI Suggest &#10024;</button>
             </div>
+            <div aria-live="polite" class="hidden mt-2 space-y-1.5" id="commit-ai-suggestions"></div>
+            <div class="mt-1.5 font-label-mono text-[9px] text-on-surface-variant" id="commit-ai-status">&#9679; Checking local AI&hellip;</div>
           </div>
           <div>
             <label class="block font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant mb-1">Execution Mode</label>
@@ -1564,14 +1729,113 @@
           <div class="font-label-mono text-[10px] text-on-surface-variant" id="commit-preview-summary">—</div>
           <div class="flex items-center gap-2">
             <button class="border border-outline-variant/70 px-3 py-1.5 font-label-mono text-[10px] uppercase hover:border-secondary hover:text-secondary transition-colors" id="btn-commit-close-preview" type="button">Close</button>
-            <button class="bg-primary text-surface hover:bg-secondary px-4 py-1.5 font-label-mono text-[10px] uppercase font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled id="btn-commit-run" type="button">Commit &amp; push</button>
+            <button aria-busy="false" class="bg-primary text-surface hover:bg-secondary px-4 py-1.5 font-label-mono text-[10px] uppercase font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled id="btn-commit-run" type="button">
+              <span aria-live="polite" class="commit-run-label" id="commit-run-label">Commit &amp; push</span>
+              <span aria-hidden="true" class="material-symbols-outlined commit-run-check">check</span>
+              <span aria-hidden="true" class="commit-run-rail"><span class="commit-run-fill" id="commit-run-fill"></span></span>
+            </button>
           </div>
         </div>
 
-        <div class="mt-3 font-label-mono text-[9px] text-on-surface-variant leading-relaxed">
+                <div class="mt-3 font-label-mono text-[9px] text-on-surface-variant leading-relaxed">
           PUSHES USE YOUR MACHINE'S GIT CREDENTIALS / SSH · LOGBOOK'S GITHUB TOKEN IS NEVER USED FOR WRITES · FAILED PUSHES LEAVE THE LOCAL COMMIT IN PLACE
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- 7. RELEASE NOTES / AI DIGEST GENERATOR MODAL -->
+  <div aria-hidden="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-16 px-4 pb-6 overflow-y-auto" id="release-notes-modal" role="dialog">
+    <div class="w-full max-w-3xl bg-surface border-2 border-primary text-on-surface p-5 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between gap-3 pb-3 border-b border-outline-variant/50 mb-4">
+        <div class="flex items-center space-x-2 min-w-0">
+          <span class="w-2 h-2 bg-secondary shrink-0"></span>
+          <span class="font-label-mono-bold uppercase tracking-widest truncate">RELEASE NOTES & ENGINEERING DIGEST</span>
+        </div>
+        <div class="flex items-center gap-3 shrink-0">
+          <button class="border border-outline-variant/70 px-3 py-1.5 font-label-mono text-[10px] uppercase hover:border-secondary hover:text-secondary transition-colors" id="btn-release-notes-copy" type="button">Copy Markdown</button>
+          <button class="font-label-mono text-label-mono hover:text-secondary" id="btn-close-release-notes" type="button">[x]</button>
+        </div>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-3 mb-4 bg-surface-container-low p-3 border border-outline-variant/60">
+        <div>
+          <label class="block font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant mb-1">Digest Title</label>
+          <input class="w-full bg-surface border border-outline-variant/70 px-2.5 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="release-title-input" type="text" value="Engineering Release Notes & Digest"/>
+        </div>
+        <div>
+          <label class="block font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant mb-1">Format Style</label>
+          <select class="w-full bg-surface border border-outline-variant/70 px-2.5 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="release-format-select">
+            <option value="markdown">📄 Markdown Release Notes</option>
+            <option value="digest">📊 Weekly Engineering Digest</option>
+            <option value="summary">📋 Executive Summary</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 mb-3">
+        <button class="bg-primary text-surface hover:bg-secondary px-4 py-2 font-label-mono text-[10px] uppercase font-semibold transition-colors" id="btn-generate-release" type="button">
+          <span class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-[14px]">auto_awesome</span>
+            Generate Digest
+          </span>
+        </button>
+        <span class="font-label-mono text-[10px] text-on-surface-variant" id="release-status">Ready. Analyze your commit history.</span>
+      </div>
+
+      <div class="border border-outline-variant/60 bg-surface-lowest">
+        <div class="flex items-center justify-between px-3 py-2 border-b border-outline-variant/50">
+          <span class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">Generated Markdown Preview</span>
+          <span class="font-label-mono text-[9px] text-secondary" id="release-char-count"></span>
+        </div>
+        <div class="p-4 max-h-[24rem] overflow-y-auto font-mono-data text-[11px] leading-relaxed text-on-surface whitespace-pre-wrap" id="release-notes-preview">Generate a digest to preview your release notes here.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. DEPENDENCY RADAR / HYGIENE MODAL -->
+  <div aria-hidden="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-16 px-4 pb-6 overflow-y-auto" id="radar-modal" role="dialog">
+    <div class="w-full max-w-4xl bg-surface border-2 border-primary text-on-surface p-5 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between gap-3 pb-3 border-b border-outline-variant/50 mb-4">
+        <div class="flex items-center space-x-2 min-w-0">
+          <span class="w-2 h-2 bg-secondary shrink-0"></span>
+          <span class="font-label-mono-bold uppercase tracking-widest truncate">DEPENDENCY & HYGIENE RADAR</span>
+        </div>
+        <button class="font-label-mono text-label-mono hover:text-secondary" id="btn-close-radar" type="button">[x]</button>
+      </div>
+
+      <p class="font-body-sm text-body-sm text-on-surface-variant mb-4">Scans your local projects for dependency manifests, missing documentation, and repository hygiene issues.</p>
+
+      <div class="flex gap-2 mb-4">
+        <button class="bg-primary text-surface hover:bg-secondary px-4 py-2 font-label-mono text-[10px] uppercase font-semibold transition-colors" id="btn-run-radar" type="button">
+          <span class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-[14px]">radar</span>
+            Scan Workspace
+          </span>
+        </button>
+        <button class="border border-outline-variant/70 px-3 py-1.5 font-label-mono text-[10px] uppercase hover:border-secondary hover:text-secondary transition-colors" id="btn-change-radar-folder" type="button">Change Folder</button>
+        <span class="font-label-mono text-[10px] text-on-surface-variant flex items-center" id="radar-folder-label">—</span>
+      </div>
+
+      <div class="border border-outline-variant/60">
+        <table class="w-full font-mono-data text-[11px]">
+          <thead>
+            <tr class="border-b border-outline-variant/60 font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">
+              <th class="text-left px-3 py-2">Repository</th>
+              <th class="text-center px-3 py-2">README</th>
+              <th class="text-center px-3 py-2">LICENSE</th>
+              <th class="text-center px-3 py-2">.gitignore</th>
+              <th class="text-center px-3 py-2">CI/CD</th>
+              <th class="text-left px-3 py-2">Manifests</th>
+              <th class="text-right px-3 py-2">Dependencies</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-outline-variant/30" id="radar-results-body">
+            <tr><td class="px-3 py-3 text-on-surface-variant" colspan="7">Choose a folder and scan to see results.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-3 font-label-mono text-[9px] text-on-surface-variant">Scans package.json, requirements.txt, Cargo.toml, go.mod, and checks for LICENSE, README, .gitignore, and CI/CD workflows.</div>
     </div>
   </div>
 
@@ -1629,6 +1893,23 @@
       var ctx = getAudioCtx();
       if (!ctx) return;
       var now = ctx.currentTime;
+      if (type === "success") {
+        [523.25, 659.25, 783.99].forEach(function (frequency, index) {
+          var noteAt = now + index * 0.085;
+          var noteOsc = ctx.createOscillator();
+          var noteGain = ctx.createGain();
+          noteOsc.type = index === 2 ? "triangle" : "sine";
+          noteOsc.frequency.setValueAtTime(frequency, noteAt);
+          noteGain.gain.setValueAtTime(0.0001, noteAt);
+          noteGain.gain.exponentialRampToValueAtTime(0.042, noteAt + 0.015);
+          noteGain.gain.exponentialRampToValueAtTime(0.0001, noteAt + 0.34);
+          noteOsc.connect(noteGain);
+          noteGain.connect(ctx.destination);
+          noteOsc.start(noteAt);
+          noteOsc.stop(noteAt + 0.36);
+        });
+        return;
+      }
       var osc = ctx.createOscillator();
       var gain = ctx.createGain();
       osc.connect(gain);
@@ -1806,10 +2087,21 @@
       done: false,
       results: [],
       runMessage: "",
+      runTotal: 0,
+      successTimer: null,
       summary: null,
       error: "",
       selectedPaths: {},
-      expandedPaths: {}
+      expandedPaths: {},
+      ai: {
+        loading: false,
+        suggestions: [],
+        provider: "",
+        model: "",
+        offline: true,
+        statusLoaded: false,
+        error: ""
+      }
     }
   };
 
@@ -4756,7 +5048,7 @@
     if (el) el.scrollIntoView({ behavior: "smooth" });
   }
 
-  var MODAL_IDS = ["cmd-palette-modal", "profile-modal", "shortcuts-modal", "session-modal", "glossary-modal", "commit-modal"];
+  var MODAL_IDS = ["cmd-palette-modal", "profile-modal", "shortcuts-modal", "session-modal", "glossary-modal", "commit-modal", "release-notes-modal", "radar-modal"];
 
   function visibleModal() {
     for (var i = MODAL_IDS.length - 1; i >= 0; i--) {
@@ -4999,6 +5291,10 @@
     state.commit.summary = null;
     state.commit.done = false;
     state.commit.runMessage = "";
+    state.commit.ai.suggestions = [];
+    state.commit.ai.error = "";
+    renderCommitAi();
+    if (!state.commit.ai.statusLoaded) refreshCommitAiStatus();
     if (state.commit.root) {
       showCommitPreviewView();
       scanCommitRoot(state.commit.root);
@@ -5119,6 +5415,8 @@
     state.commit.results = [];
     state.commit.summary = null;
     state.commit.runMessage = "";
+    state.commit.ai.suggestions = [];
+    state.commit.ai.error = "";
     renderCommitPreview();
     try {
       var data = await apiJson("/commit/scan", {
@@ -5144,6 +5442,117 @@
       state.commit.error = commitErrorLabel(e);
       renderCommitPreview();
     }
+  }
+
+  function commitAiProviderLabel(provider) {
+    if (provider === "ollama") return "Ollama";
+    if (provider === "lm-studio") return "LM Studio";
+    if (provider === "omniroute") return "OmniRoute";
+    if (provider === "gemini") return "Gemini";
+    return "Rule engine";
+  }
+
+  function clearCommitAiSuggestions() {
+    state.commit.ai.suggestions = [];
+    state.commit.ai.error = "";
+  }
+
+  function chooseCommitAiSuggestion(index) {
+    var suggestion = state.commit.ai.suggestions[index];
+    if (!suggestion) return;
+    var input = document.getElementById("commit-message-input");
+    if (input) {
+      input.value = suggestion;
+      input.focus();
+      input.setSelectionRange(suggestion.length, suggestion.length);
+    }
+    playSound("tick");
+  }
+
+  function renderCommitAi() {
+    var ai = state.commit.ai;
+    var button = document.getElementById("btn-commit-ai-suggest");
+    var container = document.getElementById("commit-ai-suggestions");
+    var status = document.getElementById("commit-ai-status");
+    var selectedCount = Object.keys(state.commit.selectedPaths || {}).length;
+    if (button) {
+      button.disabled = ai.loading || state.commit.running || state.commit.scanLoading || !selectedCount;
+      button.textContent = ai.loading ? "Thinking\u2026" : "AI Suggest \u2728";
+    }
+    if (container) {
+      container.textContent = "";
+      if (ai.suggestions.length) {
+        container.classList.remove("hidden");
+        ai.suggestions.forEach(function (suggestion, index) {
+          var option = document.createElement("button");
+          option.type = "button";
+          option.className = "ai-suggestion-btn w-full text-left border border-outline-variant/70 bg-surface px-2.5 py-1.5 font-mono-data text-[11px] text-on-surface hover:border-secondary hover:bg-surface-container transition-colors";
+          option.textContent = "[" + (index + 1) + "] " + suggestion;
+          option.setAttribute("data-ai-index", String(index));
+          option.addEventListener("click", function () { chooseCommitAiSuggestion(index); });
+          container.appendChild(option);
+        });
+      } else {
+        container.classList.add("hidden");
+      }
+    }
+    if (status) {
+      if (ai.loading) {
+        status.textContent = "\u25CF Analyzing sanitized local changes\u2026";
+      } else if (ai.error) {
+        status.textContent = "\u25CF " + ai.error;
+      } else if (!ai.statusLoaded) {
+        status.textContent = "\u25CF Checking local AI\u2026";
+      } else if (ai.provider === "heuristic" || !ai.provider) {
+        status.textContent = "\u25CF Offline rule engine ready \u00B7 no model required";
+      } else {
+        var location = ai.offline ? "100% Offline" : "Cloud explicitly enabled";
+        status.textContent = "\u25CF " + (ai.offline ? "Local AI: " : "AI: ") + commitAiProviderLabel(ai.provider) + (ai.model ? " (" + ai.model + ")" : "") + " \u00B7 " + location;
+      }
+    }
+  }
+
+  async function refreshCommitAiStatus() {
+    try {
+      var data = await apiJson("/commit/ai-status");
+      state.commit.ai.provider = data.provider || "heuristic";
+      state.commit.ai.model = data.model || "";
+      state.commit.ai.offline = data.offline !== false;
+      state.commit.ai.statusLoaded = true;
+    } catch (e) {
+      state.commit.ai.provider = "heuristic";
+      state.commit.ai.model = "";
+      state.commit.ai.offline = true;
+      state.commit.ai.statusLoaded = true;
+    }
+    renderCommitAi();
+  }
+
+  async function requestCommitAiSuggestions() {
+    if (state.commit.ai.loading) return;
+    var paths = Object.values(state.commit.selectedPaths).filter(function (value) { return typeof value === "string" && value; });
+    if (!paths.length) return;
+    state.commit.ai.loading = true;
+    state.commit.ai.error = "";
+    state.commit.ai.suggestions = [];
+    renderCommitAi();
+    try {
+      var data = await apiJson("/commit/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ root: state.commit.root, paths: paths })
+      });
+      state.commit.ai.suggestions = Array.isArray(data.suggestions) ? data.suggestions.slice(0, 3) : [];
+      state.commit.ai.provider = data.provider || "heuristic";
+      state.commit.ai.model = data.model || "";
+      state.commit.ai.offline = data.offline !== false;
+      state.commit.ai.statusLoaded = true;
+      if (!state.commit.ai.suggestions.length) state.commit.ai.error = "No valid suggestions returned";
+    } catch (e) {
+      state.commit.ai.error = commitErrorLabel(e);
+    }
+    state.commit.ai.loading = false;
+    renderCommitAi();
   }
 
   function commitPreviewState(repo, result) {
@@ -5188,6 +5597,7 @@
   }
 
   function renderCommitPreview() {
+    renderCommitAi();
     var rootLabel = document.getElementById("commit-root-label");
     var status = document.getElementById("commit-scan-status");
     var body = document.getElementById("commit-preview-body");
@@ -5329,6 +5739,7 @@
           var p = orig.toLowerCase();
           if (chk.checked) state.commit.selectedPaths[p] = orig;
           else delete state.commit.selectedPaths[p];
+          clearCommitAiSuggestions();
           renderCommitPreview();
         });
       });
@@ -5526,7 +5937,10 @@ function commandItems() {
       { label: "Export repositories CSV", category: "EXPORT", action: function () { exportRepos("csv"); } },
       { label: "Export repositories JSON", category: "EXPORT", action: function () { exportRepos("json"); } },
       { label: "Start Kiosk Presentation Mode (auto-rotating sections)", category: "PRESENTATION", action: function () { toggleKioskMode(); } },
-      { label: "Toggle Portfolio Mode (curated public archive view)", category: "PRESENTATION", action: function () { togglePortfolioMode(); } }
+      { label: "Toggle Portfolio Mode (curated public archive view)", category: "PRESENTATION", action: function () { togglePortfolioMode(); } },
+      { label: "Generate Release Notes / Weekly Engineering Digest", category: "AI", action: function () { openModal("release-notes-modal"); } },
+      { label: "Open Dependency & Hygiene Radar", category: "RADAR", action: function () { openModal("radar-modal"); } },
+      { label: "Stash all working trees across workspace", category: "GIT OPS", action: function () { stashAllRepos(); } }
     ];
     if (state.authProbe && state.authProbe.features && state.authProbe.features.commitNow) {
       items.push({ label: "Commit local changes to GitHub", category: "COMMIT", action: function () { openCommitModal(); } });
@@ -5541,7 +5955,147 @@ function commandItems() {
     return items;
   }
 
-  function renderCommandResults(query) {
+  
+  async function generateAndDisplayReleaseNotes() {
+    var title = document.getElementById("release-title-input") && document.getElementById("release-title-input").value || "Engineering Release Notes & Digest";
+    var status = document.getElementById("release-status");
+    var preview = document.getElementById("release-notes-preview");
+    var charCount = document.getElementById("release-char-count");
+    if (status) status.textContent = "Generating digest from GitHub telemetry…";
+    if (preview) preview.textContent = "Analyzing commits and synthesizing release notes…";
+    playSound("relay");
+    try {
+      var res = await apiJson("/release-notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title })
+      });
+      if (!res || !res.markdown) throw new Error("No markdown returned");
+      if (preview) { preview.textContent = res.markdown; preview.scrollTop = 0; }
+      if (charCount) charCount.textContent = (res.markdown.length || 0) + " chars";
+      var totalGroups = (res.grouped && res.grouped.features ? res.grouped.features.length : 0)
+                     + (res.grouped && res.grouped.fixes ? res.grouped.fixes.length : 0)
+                     + (res.grouped && res.grouped.refactoring ? res.grouped.refactoring.length : 0)
+                     + (res.grouped && res.grouped.documentation ? res.grouped.documentation.length : 0)
+                     + (res.grouped && res.grouped.chores ? res.grouped.chores.length : 0);
+      if (status) status.textContent = "Digest generated. " + totalGroups + " commits analyzed across all repositories.";
+      showToast("RELEASE NOTES GENERATED");
+    } catch (e) {
+      if (status) status.textContent = "Failed: " + (e.message || String(e));
+      if (preview) preview.textContent = "Could not generate release notes. Ensure your GitHub data is loaded (public token or OAuth session).";
+      showToast("RELEASE NOTES FAILED");
+    }
+  }
+
+  async function runRadarScan() {
+    var root = (state.commit && state.commit.root) || "";
+    if (!root) { showToast("SELECT A PROJECTS FOLDER FIRST IN COMMIT NOW"); return; }
+    var label = document.getElementById("radar-folder-label");
+    var body = document.getElementById("radar-results-body");
+    if (label) label.textContent = root;
+    if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="7">Scanning repositories…</td></tr>';
+    playSound("relay");
+    try {
+      var data = await apiJson("/dependencies/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ root: root })
+      });
+      if (!data || !Array.isArray(data.repos)) throw new Error("Invalid response from server.");
+      var rows = data.repos.map(function(r) {
+        var chk = function(ok) { return ok ? '<span class="text-[#2E7D6B] font-bold">&#10003;</span>' : '<span class="text-secondary font-bold">&#10005;</span>'; };
+        var mfs = (r.manifests && r.manifests.length) ? r.manifests.join(", ") : "&#8212;";
+        return '<tr class="hover:bg-surface-container/30 transition-colors">' +
+          '<td class="px-3 py-2"><div class="font-medium truncate max-w-[14rem]" title="' + escapeHtml(r.path) + '">' + escapeHtml(r.name) + '</div></td>' +
+          '<td class="px-3 py-2 text-center">' + chk(r.hasReadme) + '</td>' +
+          '<td class="px-3 py-2 text-center">' + chk(r.hasLicense) + '</td>' +
+          '<td class="px-3 py-2 text-center">' + chk(r.hasGitignore) + '</td>' +
+          '<td class="px-3 py-2 text-center">' + chk(r.hasWorkflow) + '</td>' +
+          '<td class="px-3 py-2 text-[10px] text-on-surface-variant">' + escapeHtml(mfs) + '</td>' +
+          '<td class="px-3 py-2 text-right tabular-nums font-bold">' + (r.dependenciesCount || 0) + '</td>' +
+          '</tr>';
+      }).join("");
+      if (body) body.innerHTML = rows || '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="7">No projects found in this folder.</td></tr>';
+      showToast("RADAR COMPLETE · " + (data.repos && data.repos.length || 0) + " REPOSITORIES SCANNED");
+    } catch (e) {
+      if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-secondary" colspan="7">' + escapeHtml(e.message || "Scan failed") + '</td></tr>';
+      showToast("RADAR SCAN FAILED");
+    }
+  }
+
+  function renderProductivityClock() {
+    var commits = typeof COMMITS !== "undefined" && Array.isArray(COMMITS) ? COMMITS : [];
+    var hourlyCounts = new Array(24).fill(0);
+    commits.forEach(function(c) {
+      try {
+        var d = c.date instanceof Date ? c.date : new Date(c.iso || c.date);
+        if (isNaN(d.getTime())) return;
+        var h = d.getHours();
+        if (h >= 0 && h < 24) hourlyCounts[h] = (hourlyCounts[h] || 0) + 1;
+      } catch(e) {}
+    });
+    var maxHourly = Math.max.apply(null, hourlyCounts.filter(function(n) { return n > 0; })) || 1;
+
+    // SVG Radial Clock
+    var svg = document.getElementById("radial-clock-svg");
+    if (svg) {
+      var cx = 150, cy = 150, r0 = 30, r1 = 120;
+      var parts = hourlyCounts.map(function(count, h) {
+        var pct = count / maxHourly;
+        var a0 = (h / 24) * 2 * Math.PI - Math.PI / 2;
+        var a1 = ((h + 1) / 24) * 2 * Math.PI - Math.PI / 2;
+        var col = pct > 0.5 ? "var(--c-secondary)" : (pct > 0.2 ? "var(--c-on-surface)" : "var(--c-outline-variant)");
+        var x0 = cx + r0 * Math.cos(a0), y0 = cy + r0 * Math.sin(a0);
+        var x1 = cx + r1 * Math.cos(a0), y1 = cy + r1 * Math.sin(a0);
+        var x2 = cx + r1 * Math.cos(a1), y2 = cy + r1 * Math.sin(a1);
+        var x3 = cx + r0 * Math.cos(a1), y3 = cy + r0 * Math.sin(a1);
+        var large = (a1 - a0) > Math.PI ? 1 : 0;
+        return '<path d="M' + x0.toFixed(1) + ',' + y0.toFixed(1) + ' L' + x1.toFixed(1) + ',' + y1.toFixed(1) + ' A' + r1 + ',' + r1 + ' 0 ' + large + ' 1 ' + x2.toFixed(1) + ',' + y2.toFixed(1) + ' L' + x3.toFixed(1) + ',' + y3.toFixed(1) + ' A' + r0 + ',' + r0 + ' 0 ' + large + ' 0 ' + x0.toFixed(1) + ',' + y0.toFixed(1) + ' Z" fill="' + col + '" opacity="0.75"/>';
+      });
+      var labels = [0,6,12,18,24].map(function(h) {
+        var a = (h / 24) * 2 * Math.PI - Math.PI / 2;
+        var lx = cx + (r1 + 16) * Math.cos(a), ly = cy + (r1 + 16) * Math.sin(a);
+        return '<text x="' + lx.toFixed(1) + '" y="' + ly.toFixed(1) + '" text-anchor="middle" dominant-baseline="central" font-family="JetBrains Mono,monospace" font-size="9" fill="var(--c-on-surface-variant)">' + h + '</text>';
+      });
+      svg.innerHTML = '<circle cx="' + cx + '" cy="' + cy + '" r="130" fill="var(--c-surface-high)" stroke="var(--c-outline-variant)" stroke-width="1"/><circle cx="' + cx + '" cy="' + cy + '" r="28" fill="var(--c-surface)" stroke="var(--c-outline-variant)" stroke-width="1"/>' + parts.join("") + labels.join("");
+    }
+
+    // Hourly bar chart
+    var barContainer = document.getElementById("hourly-bars-container");
+    if (barContainer) {
+      barContainer.innerHTML = hourlyCounts.map(function(count, h) {
+        var pct = count / maxHourly;
+        var col = pct > 0.5 ? "var(--c-secondary)" : (pct > 0.2 ? "var(--c-on-surface)" : "var(--c-outline-variant)");
+        var barH = Math.max(2, Math.round(pct * 100));
+        return '<div class="flex-1 flex flex-col items-center justify-end gap-0.5 cursor-default group relative" title="' + h + ':00 &#8212; ' + count + ' commits">' +
+          '<div class="w-full bar-anim group-hover:bg-secondary transition-colors" style="height:' + barH + '%;background-color:' + col + ';min-height:2px;"></div>' +
+          '</div>';
+      }).join("");
+    }
+  }
+
+  async function stashAllRepos() {
+    var paths = [];
+    if (state.commit && state.commit.scan && state.commit.scan.repos) {
+      state.commit.scan.repos.forEach(function(r) {
+        if (r.path) paths.push(r.path);
+      });
+    }
+    if (!paths.length) { showToast("SCAN REPOSITORIES FIRST"); return; }
+    playSound("relay");
+    try {
+      var res = await apiJson("/commit/stash", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: paths })
+      });
+      var stashed = (res.results || []).filter(function(r) { return r.ok; }).length;
+      showToast("STASHED " + stashed + " REPOSITORIES");
+    } catch(e) {
+      showToast("STASH FAILED");
+    }
+  }
+function renderCommandResults(query) {
     var q = (query || "").trim().toLowerCase();
     var listEl = document.getElementById("cmd-results-list");
     var items = commandItems();
@@ -5879,6 +6433,7 @@ function commandItems() {
     hydrate(payload);
     if (initial || !previous || !meta.sections) {
       bootRender();
+    setTimeout(function () { renderProductivityClock(); }, 300);
       return true;
     }
     var changed = function (name) { return previous[name] !== meta.sections[name]; };
@@ -6308,12 +6863,14 @@ function commandItems() {
       showToast("AUDIO " + (soundEnabled ? "ON" : "MUTED"));
     });
     document.getElementById("btn-commit-now").addEventListener("click", function () { openCommitModal(); });
+    document.getElementById("btn-commit-ai-suggest").addEventListener("click", function () { requestCommitAiSuggestions(); });
     document.getElementById("btn-commit-select-all").addEventListener("click", function () {
       if (!state.commit.scan || !state.commit.scan.repos) return;
       state.commit.selectedPaths = {};
       state.commit.scan.repos.forEach(function (r) {
         if (r.actionable && !(r.secrets || []).length) state.commit.selectedPaths[r.path.toLowerCase()] = r.path;
       });
+      clearCommitAiSuggestions();
       renderCommitPreview();
     });
     document.getElementById("btn-commit-deselect-clean").addEventListener("click", function () {
@@ -6322,6 +6879,7 @@ function commandItems() {
       state.commit.scan.repos.forEach(function (r) {
         if (r.actionable && r.changed) state.commit.selectedPaths[r.path.toLowerCase()] = r.path;
       });
+      clearCommitAiSuggestions();
       renderCommitPreview();
     });
     document.getElementById("btn-commit-deselect-sensitive").addEventListener("click", function () {
@@ -6329,6 +6887,7 @@ function commandItems() {
       state.commit.scan.repos.forEach(function (r) {
         if (r.secrets && r.secrets.length) delete state.commit.selectedPaths[r.path.toLowerCase()];
       });
+      clearCommitAiSuggestions();
       renderCommitPreview();
     });
     document.getElementById("commit-check-all").addEventListener("change", function () {
@@ -6340,6 +6899,7 @@ function commandItems() {
           if (r.actionable && !(r.secrets || []).length) state.commit.selectedPaths[r.path.toLowerCase()] = r.path;
         });
       }
+      clearCommitAiSuggestions();
       renderCommitPreview();
     });
     document.getElementById("commit-mode-select").addEventListener("change", function () {
@@ -6380,6 +6940,20 @@ function commandItems() {
       if (state.commit.root) scanCommitRoot(state.commit.root);
     });
     document.getElementById("btn-commit-run").addEventListener("click", function () { runCommitNow(); });
+    document.getElementById("btn-generate-release").addEventListener("click", function () { generateAndDisplayReleaseNotes(); });
+    document.getElementById("btn-release-notes-copy").addEventListener("click", function () {
+      var preview = document.getElementById("release-notes-preview");
+      if (preview && preview.textContent) {
+        navigator.clipboard.writeText(preview.textContent).then(function() { showToast("MARKDOWN COPIED TO CLIPBOARD"); }).catch(function() {});
+      }
+    });
+    document.getElementById("btn-close-release-notes").addEventListener("click", closeAllModals);
+    document.getElementById("btn-run-radar").addEventListener("click", function () { runRadarScan(); });
+    document.getElementById("btn-change-radar-folder").addEventListener("click", function () {
+      openModal("commit-modal");
+      closeAllModals("radar-modal");
+    });
+    document.getElementById("btn-close-radar").addEventListener("click", closeAllModals);
     document.getElementById("btn-cmd-palette").addEventListener("click", function () { openModal("cmd-palette-modal"); });
     document.getElementById("btn-close-cmd").addEventListener("click", closeAllModals);
     document.getElementById("cmd-input").addEventListener("input", function () { renderCommandResults(this.value); });
@@ -6459,6 +7033,13 @@ function commandItems() {
       if (e.key === "Escape") { if (state.kioskActive) toggleKioskMode(); closeAllModals(); return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openModal("cmd-palette-modal"); return; }
       if (e.key === "Escape") { closeAllModals(); if (state.globalRepoFilter) setGlobalRepoFilter(null); return; }
+      var commitModal = document.getElementById("commit-modal");
+      var aiSuggestions = document.getElementById("commit-ai-suggestions");
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && ["1", "2", "3"].indexOf(e.key) !== -1 && commitModal && !commitModal.classList.contains("hidden") && aiSuggestions && !aiSuggestions.classList.contains("hidden")) {
+        e.preventDefault();
+        chooseCommitAiSuggestion(parseInt(e.key, 10) - 1);
+        return;
+      }
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
 
       if (e.key === "/") {

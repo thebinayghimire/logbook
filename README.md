@@ -133,6 +133,14 @@ Commit Now uses the `git` CLI and the machine's existing credential helper or SS
 
 The folder browser can read any directory the bridge process can read. Keep this feature on a private, loopback-only instance. `HOST=127.0.0.1` does **not** protect a loopback listener exposed through a reverse proxy: leave `ENABLE_COMMIT_NOW=0` on any proxied deployment. Anyone who can use the authenticated browser session can invoke a run, so sign out when you leave the machine.
 
+### Semantic commit suggestions
+
+The Commit Message row includes **AI Suggest** after a repository scan. It collects staged and working-tree diffs plus bounded excerpts from safe untracked source files, removes sensitive-file sections and token-shaped values, caps the combined diff payload at 12 KB, and requests exactly three Conventional Commit options. Press `1`, `2`, or `3` while the options are visible to choose one.
+
+The provider order is Ollama on `127.0.0.1:11434`, LM Studio on `127.0.0.1:1234`, an explicitly enabled OmniRoute gateway, an explicitly enabled Gemini fallback, then the built-in rule engine. No model is required, and the rule engine always returns three suggestions when configured providers are unavailable. Code does not leave the machine while cloud AI remains disabled.
+
+Cloud routing is deliberately opt-in. With `ALLOW_CLOUD_AI=1`, OmniRoute is used when `OMNIROUTE_API_KEY` is configured; Gemini remains an optional later fallback when `GEMINI_API_KEY` is configured. Only the scrubbed, bounded payload is sent. Leave `ALLOW_CLOUD_AI=0` for the zero-cloud guarantee.
+
 ## Configuration
 
 Copy `.env.example` to `.env`; `.env` is ignored by git.
@@ -147,6 +155,12 @@ Copy `.env.example` to `.env`; `.env` is ignored by git.
 | `HOST` | `127.0.0.1` | Bridge listener address |
 | `ALLOW_LOCAL_AUTH` | enabled only on loopback | Adopt the local `gh` token; set to `0` on shared or proxied hosts |
 | `ENABLE_COMMIT_NOW` | `0` | Enable the local Commit Now picker and commit/push endpoints; forced off unless `HOST` is loopback. Never enable on a shared, proxied, or public host |
+| `ALLOW_CLOUD_AI` | `0` | Permit configured OmniRoute or Gemini providers after local providers fail |
+| `OMNIROUTE_BASE_URL` | `http://127.0.0.1:20128/v1` | Local OmniRoute OpenAI-compatible gateway |
+| `OMNIROUTE_API_KEY` | â€” | OmniRoute gateway key; server-side only and ignored unless `ALLOW_CLOUD_AI=1` |
+| `OMNIROUTE_MODEL` | `auto/best-coding-fast` | OmniRoute model or routing alias used for code-specific commit suggestions |
+| `GEMINI_API_KEY` | â€” | Optional server-side Gemini key; ignored unless `ALLOW_CLOUD_AI=1` |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model used by the explicitly enabled cloud fallback |
 | `SESSION_TTL_HOURS` | `12` | Fixed lifetime of a persistent server session |
 | `SNAPSHOT_FRESH_MS` | `60000` | Skip a page-load rescan when the stored snapshot is newer than this; explicit refreshes and detected changes still scan |
 | `SNAPSHOT_ENCRYPTION_KEY` | generated under `data/` for development | 32 bytes (base64 or 64 hex chars) used to encrypt snapshots and session tokens; required in production |
