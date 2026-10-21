@@ -115,13 +115,16 @@ HOST=127.0.0.1
 
 After restarting the bridge, sign in and click **Commit now** in the header. The button only appears when `/api/session` reports `features.commitNow: true`. If a projects root was saved before, the modal opens straight into a fresh scan. Otherwise it opens an in-app folder browser backed by the bridge process; the chosen root is stored per account as the `commitRoot` preference.
 
-The preview is read-only. One confirmation starts the run. For every actionable repository, Logbook:
+The preview is read-only. Select the repositories you want, optionally adjust the commit message and execution mode, then confirm. For every selected repository, Logbook:
 
 - scans up to three directory levels for `.git` entries, stops descending at a repository boundary, and skips dot-directories plus common dependency, build, cache, and system folders such as `node_modules`, `.venv`, `dist`, `build`, `target`, and `vendor`;
-- stages all changes, including untracked files, with `git add -A`; `.gitignore` is still honored;
-- flags likely secret files that are **not** ignored (for example `.env`, credentials JSON, private keys, and keystores) in the preview and inside each repository row;
-- commits with `chore: checkpoint YYYY-MM-DD HH:MM`, using the repository's configured `user.name` and `user.email`;
+- stages tracked modifications with `git add -u`, then stages ordinary untracked files. `.gitignore` is honored;
+- excludes suspicious untracked artifacts from staging: binary/cache extensions such as `.db` and `.exe`, unexpanded environment paths such as `%SystemDrive%`, untracked folders, and files over 256 KB. Excluded files stay in the working tree and are reported in the preview and result;
+- blocks any repository with likely secret files that are **not** ignored (for example `.env`/`dev.env`, `.git-credentials`, `client_secret*.json`, credentials JSON, private keys, certificates, and keystores) and unchecks it by default;
+- blocks a repository when a suspicious artifact is already staged, because `git commit` would include it;
+- commits with `chore: checkpoint YYYY-MM-DD HH:MM` by default, or an optional custom message capped at 200 characters, using the repository's configured `user.name` and `user.email`;
 - pushes the current branch, creating the upstream on the selected remote when one is missing, and pushes clean repositories that are already ahead;
+- commits locally but **defers the push** when the branch is behind its upstream, so a non-fast-forward rejection cannot discard the local checkpoint. Pull or rebase, then push manually;
 - reports per-repository progress over an NDJSON stream and records a `commit_now` audit event with repository names and result counts.
 
 It deliberately does **not** pull, rebase, merge, force-push, or resolve conflicts. A failed push leaves the local commit in place and reports the failure. Repositories are skipped when they are detached, bare, submodules, mid-merge/rebase/cherry-pick/revert/bisect, contain unmerged paths, or lack a git identity. There is no undo in the UI: use git's local reflog for a bad local commit, and revert or amend on the remote as you would normally.
@@ -161,7 +164,7 @@ Copy `.env.example` to `.env`; `.env` is ignored by git.
 - **Account binding.** The requested username is stored with the one-time OAuth state. The callback rejects authorization when the GitHub account that consented does not match that username. Authorizing a different account explicitly revokes the current bridge session first.
 - **OAuth state + PKCE.** The bridge stores a one-time `state` and PKCE verifier, sets an `HttpOnly` state cookie, verifies both on callback, and exchanges the code server-side. Return URLs are validated to prevent open redirects.
 - **CSRF and origin checks.** Every authenticated state-changing API call requires a session-derived `X-Logbook-CSRF` header, `X-Logbook-Auth: 1`, and a same-origin `Origin`/`Sec-Fetch-Site` when present. Cross-origin mutations are rejected. Local `gh` authorization, which has no session yet, uses the same origin/header guard.
-- **Opt-in local writes.** Commit Now is disabled unless `ENABLE_COMMIT_NOW=1` and `HOST` is a loopback address. Its endpoints require the normal authenticated session, CSRF token, and origin check. Repository paths are resolved and confined to the selected root, symlinks are followed before that check, and only one run may execute at a time. Git commands use `execFile` (no shell), run with `GIT_TERMINAL_PROMPT=0` and SSH batch mode, and use the machine's credentials rather than the Logbook OAuth token. The feature is not a GitHub write proxy and does not make the `/api/gh/*` route writable.
+- **Opt-in local writes.** Commit Now is disabled unless `ENABLE_COMMIT_NOW=1` and `HOST` is a loopback address. Its endpoints require the normal authenticated session, CSRF token, and origin check. Repository paths are resolved and confined to the selected root, symlinks are followed before that check, and only one run may execute at a time. Likely secret files block their repository, and suspicious untracked artifacts are never staged automatically. Git commands use `execFile` (no shell), run with `GIT_TERMINAL_PROMPT=0` and SSH batch mode, and use the machine's credentials rather than the Logbook OAuth token. The feature is not a GitHub write proxy and does not make the `/api/gh/*` route writable.
 - **No private payload persistence in the browser.** Private accounts and repository payloads are never written to `localStorage` or `sessionStorage`. Only public telemetry is cached in the browser, for up to six hours. Preferences for bridge sessions are stored server-side and partitioned by GitHub account; browser `localStorage` preferences are used only in public/static mode.
 - **Encrypted server snapshots.** Normalized private snapshots live in SQLite encrypted with AES-256-GCM and authenticated against the GitHub account ID. Responses use ETags so unchanged polls do not decrypt the snapshot.
 - **Security headers.** Responses set CSP with per-request script nonces, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, COOP/CORP, and `X-Robots-Tag`. HTTPS requests also receive HSTS. Static serving blocks `.env`, `.git`, `node_modules`, `server.js`, dot-segment traversal, and non-whitelisted file types.
@@ -268,7 +271,7 @@ A cold authenticated load costs roughly `10 + 2 × repositories scanned` request
 - Sign-out destroys the server session and returns to the gate.
 - An invalid token is rejected with `401` and is not stored.
 - OAuth redirect generation, state cookie, PKCE challenge, callback routing, and error handling were exercised with placeholder credentials. A real code exchange requires a registered OAuth app.
-- All **49** automated tests pass under Node's `node:test` runner, including commit-engine scanning, secret detection, path confinement, and commit/push behavior against temporary repositories.
+- All **57** automated tests pass under Node's `node:test` runner, including commit-engine scanning, secret detection, path confinement, artifact exclusion, behind-remote handling, and commit/push behavior against temporary repositories.
 - Commit Now was exercised end-to-end through the bridge and dashboard with temporary repositories and a local bare remote: folder browsing, preview, NDJSON progress, checkpoint commit, push-only repo, secret warning, CSRF rejection, and root-confinement rejection.
 
 ## Features

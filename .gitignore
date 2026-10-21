@@ -19,3 +19,7 @@ npm-debug.log*
 .env
 .env.local
 data/
+
+# Local test / OS artifacts
+check.html
+%SystemDrive%/

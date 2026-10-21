@@ -23,6 +23,11 @@ const MAX_LIST_ENTRIES = 500;
 const GIT_TIMEOUT_MS = 20000;
 const PUSH_TIMEOUT_MS = 90000;
 const MAX_STATUS_BUFFER = 12 * 1024 * 1024;
+// Untracked files above this size are treated as generated artifacts and are
+// left out of the automatic staging pass. They can still be staged manually.
+const MAX_UNTRACKED_BYTES = 256 * 1024;
+const MAX_ARTIFACT_REPORT = 100;
+const SUSPICIOUS_EXTENSIONS = /\.(?:db|db-wal|db-shm|db-journal|sqlite|sqlite3|sqlite-wal|sqlite-shm|exe|dll|so|dylib|pdb|dmp|core|pyc|pyo|class|o|obj|lib|a|bin|iso|img|vmdk|vdi|qcow2|pak|etl|evtx)$/i;
 
 // Dependency, build, cache and system folders that should never be walked.
 // Dot-directories are skipped separately, so .git/.venv/.next are covered.
@@ -52,15 +57,20 @@ const SKIP_DIRS = new Set([
 
 const SECRET_PATTERNS = [
   /^\.env(?:\..+)?$/i,
+  // dev.env, prod.env, local.env, dev.env.local
+  /^(?:[^/]+\.)?env(?:\.[^/]+)?$/i,
+  /^\.envrc$/i,
   /^\.npmrc$/i,
   /^\.pypirc$/i,
   /^\.netrc$/i,
+  /^\.git-credentials$/i,
   /^\.htpasswd$/i,
   /^id_(?:rsa|dsa|ecdsa|ed25519)$/i,
   /^credentials(?:\..+)?$/i,
   /^secrets?(?:\..+)?$/i,
+  /^client[_-]?secret.*\.json$/i,
   /^(?:service[-_]?account|firebase[-_]?adminsdk)(?:[-_.].*)?\.json$/i,
-  /\.(?:pem|key|p12|pfx|jks|keystore|ppk|kdbx)$/i
+  /\.(?:pem|key|p12|pfx|jks|keystore|ppk|kdbx|der|pkcs12|ovpn|mobileprovision)$/i
 ];
 
 function runGit(cwd, args, options = {}) {
@@ -95,13 +105,26 @@ function runGit(cwd, args, options = {}) {
     child.on("error", (error) => {
       resolve({ ok: false, code: 1, timedOut: false, stdout: "", stderr: error.message });
     });
+    if (typeof options.input === "string") {
+      child.stdin.on("error", () => {});
+      child.stdin.end(options.input);
+    }
   });
+}
+
+function expandHomePath(value) {
+  if (value === "~") return os.homedir();
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
 }
 
 function normalizeUserPath(input) {
   if (typeof input !== "string") return null;
   let value = input.trim();
   if (!value || value.length > 4096 || value.indexOf("\0") !== -1) return null;
+  value = expandHomePath(value);
   // On Windows, "C:" means the current directory on that drive, not the root.
   if (process.platform === "win32" && /^[a-zA-Z]:$/.test(value)) value += "\\";
   return path.resolve(value);
@@ -263,17 +286,79 @@ function isConflictCode(code) {
 function isLikelySecret(file) {
   const base = path.basename(String(file || ""));
   if (!base) return false;
+  if (/\.(?:example|sample|template)\./i.test(base)) return false;
   if (/\.(?:example|sample|template|dist|pub)$/i.test(base)) return false;
   return SECRET_PATTERNS.some((pattern) => pattern.test(base));
+}
+
+function isDeletionCode(code) {
+  const value = String(code || "");
+  // Only a pure deletion is safe to ignore. AD/MD still have staged content
+  // that `git commit` would include.
+  return value === "D " || value === " D";
 }
 
 function findSecrets(changes) {
   const found = [];
   for (const entry of changes) {
+    // Removing a tracked secret is safe; flagging it would block the cleanup.
+    if (isDeletionCode(entry.code)) continue;
     if (!isLikelySecret(entry.file)) continue;
     if (found.indexOf(entry.file) === -1) found.push(entry.file);
   }
   return found.slice(0, 12);
+}
+
+function artifactReason(file) {
+  if (/%[A-Za-z_][A-Za-z0-9_()]*%/.test(file)) return "unexpanded_env";
+  if (SUSPICIOUS_EXTENSIONS.test(file)) return "binary";
+  return "";
+}
+
+function artifactReasonLabel(reason) {
+  const labels = {
+    unexpanded_env: "unexpanded environment path",
+    binary: "binary/cache extension",
+    too_large: "over 256 KB",
+    directory: "untracked directory",
+    outside_repo: "outside the repository"
+  };
+  return labels[reason] || "suspicious artifact";
+}
+
+async function findSuspiciousArtifacts(repoPath, changes) {
+  const found = [];
+  for (const entry of changes) {
+    const code = String(entry.code || "");
+    const untracked = code === "??";
+    const stagedAdd = code[0] === "A";
+    if (!untracked && !stagedAdd) continue;
+    const reason = artifactReason(entry.file);
+    if (reason) {
+      found.push({ file: entry.file, reason, staged: stagedAdd });
+      continue;
+    }
+    const full = path.resolve(repoPath, entry.file);
+    if (!isPathInside(repoPath, full)) {
+      found.push({ file: entry.file, reason: "outside_repo", staged: stagedAdd });
+      continue;
+    }
+    let stat;
+    try {
+      stat = await fsp.lstat(full);
+    } catch (error) {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      found.push({ file: entry.file, reason: "directory", staged: stagedAdd });
+    } else if (!stat.isSymbolicLink() && stat.size > MAX_UNTRACKED_BYTES) {
+      found.push({ file: entry.file, reason: "too_large", staged: stagedAdd });
+    }
+  }
+  return {
+    items: found.slice(0, MAX_ARTIFACT_REPORT),
+    truncated: found.length > MAX_ARTIFACT_REPORT
+  };
 }
 
 function remoteLabel(url) {
@@ -325,13 +410,17 @@ function skipReasonLabel(reason) {
     clean_no_upstream: "Clean; no upstream branch.",
     behind_remote: "Clean; remote has newer commits.",
     diverged: "Clean; local and remote branches have diverged.",
+    sensitive_files: "Likely secret files; remove or ignore them first.",
+    staged_artifacts: "Suspicious artifacts are already staged; unstage them first.",
+    artifacts_only: "Only suspicious untracked artifacts; nothing safe to stage.",
+    artifacts_truncated: "Too many suspicious artifacts; narrow the repository first.",
     status_failed: "Could not read git status.",
     not_a_repo: "Not a Git repository."
   };
   return labels[reason] || "Skipped.";
 }
 
-async function inspectRepo(dir) {
+async function inspectRepo(dir, options = {}) {
   const name = path.basename(dir);
   const topLevel = await runGit(dir, ["rev-parse", "--show-toplevel"]);
   if (!topLevel.ok) {
@@ -400,15 +489,40 @@ async function inspectRepo(dir) {
 
   const changed = changes.length > 0;
   const secrets = findSecrets(changes);
+  const artifactScan = changed
+    ? await findSuspiciousArtifacts(top, changes)
+    : { items: [], truncated: false };
+  const artifacts = artifactScan.items;
+  const stagedArtifacts = artifacts.filter((item) => item.staged);
+  const excludedArtifactNames = new Set(artifacts.filter((item) => !item.staged).map((item) => item.file));
+  const safeChangeCount = changes.filter((entry) => !excludedArtifactNames.has(entry.file)).length;
+
   let skipReason = "";
-  if (!changed) {
-    if (!upstream) skipReason = "clean_no_upstream";
+  let blockedReason = "";
+  if (secrets.length) {
+    skipReason = "sensitive_files";
+    blockedReason = "sensitive_files";
+  } else if (stagedArtifacts.length) {
+    skipReason = "staged_artifacts";
+    blockedReason = "staged_artifacts";
+  } else if (artifactScan.truncated) {
+    skipReason = "artifacts_truncated";
+    blockedReason = "artifacts_truncated";
+  } else if (!changed) {
+    if (!upstream && !remoteName) skipReason = "clean_no_upstream";
+    else if (!upstream && remoteName && ahead === 0) skipReason = "clean_no_upstream";
     else if (behind > 0 && ahead > 0) skipReason = "diverged";
     else if (behind > 0) skipReason = "behind_remote";
     else if (ahead === 0) skipReason = "clean";
+  } else if (safeChangeCount === 0) {
+    skipReason = "artifacts_only";
+    blockedReason = "artifacts_only";
   }
-  const canPushOnly = !changed && Boolean(upstream) && ahead > 0 && behind === 0;
-  const actionable = changed || canPushOnly;
+
+  const canPushOnly = !changed && Boolean(remoteName) && (upstream || ahead > 0) && behind === 0;
+  const actionable = !blockedReason && (changed || (Boolean(remoteName) && (changed || ahead > 0)));
+  let action = "none";
+  if (actionable) action = changed ? "commit" : (canPushOnly ? "push" : "none");
 
   return {
     ok: true,
@@ -416,19 +530,26 @@ async function inspectRepo(dir) {
     name,
     branch,
     actionable,
-    action: changed ? "commit" : (canPushOnly ? "push" : "none"),
+    action,
     skipReason,
     skipLabel: skipReason ? skipReasonLabel(skipReason) : "",
     changed,
     changeCount: changes.length,
     changes: changes.slice(0, 20),
     secrets,
+    artifacts,
+    artifactsTruncated: artifactScan.truncated,
+    safeChangeCount,
+    blocked: Boolean(blockedReason),
+    blockedReason,
     remoteName,
     remoteUrl,
     remoteLabel: remoteLabel(remoteUrl),
     upstream,
     ahead,
-    behind
+    behind,
+    pushDeferred: actionable && changed && behind > 0,
+    allChanges: options.allChanges ? changes : undefined
   };
 }
 
@@ -541,6 +662,12 @@ function defaultCommitMessage(date) {
   return "chore: checkpoint " + formatTimestamp(date);
 }
 
+function normalizeCommitMessage(value) {
+  if (typeof value !== "string") return "";
+  const message = value.replace(/\r\n?/g, "\n").replace(/\0/g, "").trim();
+  return message.slice(0, 200);
+}
+
 function sanitizeGitOutput(text) {
   return String(text || "")
     .replace(/\x1b\[[0-9;]*m/g, "")
@@ -562,23 +689,100 @@ function resultBase(repo, message) {
     pushed: false,
     skipped: false,
     failed: false,
+    blocked: false,
     status: "",
     detail: "",
-    commit: ""
+    commit: "",
+    excluded: []
   };
+}
+
+function excludedDetail(inspected) {
+  const files = (inspected.artifacts || []).map((item) => item.file);
+  if (!files.length) return "";
+  const shown = files.slice(0, 4).join(", ");
+  return " Excluded " + files.length + " suspicious untracked file" + (files.length === 1 ? "" : "s") +
+    ": " + shown + (files.length > 4 ? ", ..." : "") + ".";
+}
+
+async function stageSafeChanges(inspected) {
+  const tracked = await runGit(inspected.path, ["add", "-u"], { timeout: 30000 });
+  if (!tracked.ok) {
+    return {
+      ok: false,
+      error: "git add failed: " + (sanitizeGitOutput(tracked.stderr) || "unknown error")
+    };
+  }
+
+  const excluded = new Set((inspected.artifacts || [])
+    .filter((item) => !item.staged)
+    .map((item) => item.file));
+  const allChanges = Array.isArray(inspected.allChanges) ? inspected.allChanges : [];
+  const untracked = allChanges
+    .filter((entry) => entry.code === "??" && !excluded.has(entry.file))
+    .map((entry) => entry.file);
+
+  if (untracked.length) {
+    const added = await runGit(
+      inspected.path,
+      ["add", "--pathspec-from-file=-", "--pathspec-file-nul"],
+      { input: untracked.join("\0") + "\0", timeout: 30000 }
+    );
+    if (!added.ok) {
+      return {
+        ok: false,
+        error: "git add failed: " + (sanitizeGitOutput(added.stderr) || "unknown error")
+      };
+    }
+  }
+
+  const staged = await runGit(inspected.path, ["diff", "--cached", "--name-only", "-z"]);
+  return { ok: true, staged: staged.ok ? staged.stdout : "" };
 }
 
 async function runCommit(repoOrPath, options = {}) {
   const repoPath = typeof repoOrPath === "string" ? repoOrPath : repoOrPath.path;
-  const message = options.message || defaultCommitMessage();
-  const inspected = await inspectRepo(repoPath);
+  const message = normalizeCommitMessage(options.message) || defaultCommitMessage();
+  const inspected = await inspectRepo(repoPath, { allChanges: true });
   const base = resultBase(inspected.ok ? inspected : { name: path.basename(repoPath), path: repoPath, branch: "", remoteLabel: "" }, message);
+  const excluded = (inspected.artifacts || []).map((item) => item.file);
+  base.excluded = excluded;
 
   if (!inspected.ok) {
     return Object.assign(base, {
       failed: true,
       status: "failed",
       detail: inspected.message || inspected.reason || "Could not inspect repository."
+    });
+  }
+  if ((inspected.secrets || []).length) {
+    return Object.assign(base, {
+      blocked: true,
+      status: "blocked_sensitive",
+      detail: "Blocked: likely secret file(s) are not ignored: " + inspected.secrets.join(", ") + "."
+    });
+  }
+  const stagedArtifacts = (inspected.artifacts || []).filter((item) => item.staged);
+  if (stagedArtifacts.length) {
+    return Object.assign(base, {
+      blocked: true,
+      status: "blocked_artifacts",
+      detail: "Blocked: suspicious file(s) are already staged: " +
+        stagedArtifacts.map((item) => item.file).join(", ") + ". Unstage them first."
+    });
+  }
+  if (inspected.artifactsTruncated) {
+    return Object.assign(base, {
+      blocked: true,
+      status: "blocked_artifacts",
+      detail: "Blocked: too many suspicious untracked files to stage safely."
+    });
+  }
+  if (inspected.blockedReason === "artifacts_only") {
+    return Object.assign(base, {
+      blocked: true,
+      status: "blocked_artifacts",
+      detail: (inspected.skipLabel || "Only suspicious untracked artifacts.") + excludedDetail(inspected)
     });
   }
   if (!inspected.actionable) {
@@ -604,12 +808,19 @@ async function runCommit(repoOrPath, options = {}) {
       });
     }
 
-    const addResult = await runGit(inspected.path, ["add", "-A"], { timeout: 30000 });
+    const addResult = await stageSafeChanges(inspected);
     if (!addResult.ok) {
       return Object.assign(base, {
         failed: true,
         status: "failed",
-        detail: "git add failed: " + (sanitizeGitOutput(addResult.stderr) || "unknown error")
+        detail: addResult.error
+      });
+    }
+    if (!addResult.staged) {
+      return Object.assign(base, {
+        skipped: true,
+        status: "skipped",
+        detail: "No safe changes were staged." + excludedDetail(inspected)
       });
     }
 
@@ -626,15 +837,27 @@ async function runCommit(repoOrPath, options = {}) {
     if (hashResult.ok) commitHash = hashResult.stdout.trim();
   }
 
-  if (!inspected.remoteName) {
+  if (options.mode === "commit_local" || !inspected.remoteName) {
     return Object.assign(base, {
       committed,
       commit: commitHash,
       status: committed ? "committed_no_remote" : "skipped",
       skipped: !committed,
       detail: committed
-        ? "Committed locally; no Git remote is configured."
+        ? "Committed locally (" + (options.mode === "commit_local" ? "local mode" : "no remote") + ")." + excludedDetail(inspected)
         : "No changes to push."
+    });
+  }
+
+  if (inspected.behind > 0) {
+    return Object.assign(base, {
+      committed,
+      commit: commitHash,
+      status: committed ? "committed_behind_remote" : "skipped",
+      skipped: !committed,
+      detail: "Committed locally; remote has " + inspected.behind +
+        " newer commit" + (inspected.behind === 1 ? "" : "s") +
+        ". Pull or rebase, then push manually." + excludedDetail(inspected)
     });
   }
 
@@ -648,7 +871,7 @@ async function runCommit(repoOrPath, options = {}) {
       commit: commitHash,
       failed: true,
       status: committed ? "committed_push_failed" : "push_failed",
-      detail: "git push failed: " + (sanitizeGitOutput(pushResult.stderr || pushResult.stdout) || "unknown error")
+      detail: "git push failed: " + (sanitizeGitOutput(pushResult.stderr || pushResult.stdout) || "unknown error") + excludedDetail(inspected)
     });
   }
 
@@ -658,8 +881,8 @@ async function runCommit(repoOrPath, options = {}) {
     commit: commitHash,
     status: committed ? "committed_pushed" : "pushed",
     detail: committed
-      ? "Committed and pushed to " + (inspected.remoteLabel || inspected.remoteName) + "."
-      : "Pushed existing commits to " + (inspected.remoteLabel || inspected.remoteName) + "."
+      ? "Committed and pushed to " + (inspected.remoteLabel || inspected.remoteName) + "." + excludedDetail(inspected)
+      : "Pushed existing commits to " + (inspected.remoteLabel || inspected.remoteName) + "." + excludedDetail(inspected)
   });
 }
 
@@ -670,17 +893,19 @@ function summarize(results) {
     committed: list.filter((item) => item.committed).length,
     pushed: list.filter((item) => item.pushed).length,
     skipped: list.filter((item) => item.skipped).length,
+    blocked: list.filter((item) => item.blocked).length,
     failed: list.filter((item) => item.failed).length
   };
 }
 
 async function runCommits(paths, options = {}) {
   const message = options.message || defaultCommitMessage();
+  const mode = options.mode || "commit_push";
   const results = [];
   for (const repoPath of paths) {
     let result;
     try {
-      result = await runCommit(repoPath, { message });
+      result = await runCommit(repoPath, { message, mode });
     } catch (error) {
       result = {
         name: path.basename(repoPath),
@@ -692,9 +917,11 @@ async function runCommits(paths, options = {}) {
         pushed: false,
         skipped: false,
         failed: true,
+        blocked: false,
         status: "failed",
         detail: sanitizeGitOutput(error && error.message ? error.message : error),
-        commit: ""
+        commit: "",
+        excluded: []
       };
     }
     results.push(result);
@@ -702,24 +929,12 @@ async function runCommits(paths, options = {}) {
   }
   return results;
 }
-
-module.exports = {
-  DEFAULT_MAX_DEPTH,
-  defaultCommitMessage,
-  formatTimestamp,
-  inspectRepo,
-  isLikelySecret,
-  isPathInside,
-  listDirectories,
-  normalizeUserPath,
-  parseStatus,
-  remoteLabel,
-  resolveDirectory,
-  runCommit,
-  runCommits,
-  samePath,
-  sanitizeGitOutput,
-  scanProjects,
-  skipReasonLabel,
-  summarize
+async function undoLastCommit(repoPath) {
+  const result = await runGit(repoPath, ["reset", "--soft", "HEAD~1"]);
+  if (!result.ok) {
+    return { ok: false, error: sanitizeGitOutput(result.stderr || result.stdout) || "git reset failed" };
+  }
+  return { ok: true };
+}
+  undoLastCommit
 };

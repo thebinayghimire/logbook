@@ -23,6 +23,8 @@ const { SnapshotStore } = require("./snapshot-store");
 const { SessionStore } = require("./session-store");
 const { SyncEngine } = require("./sync-engine");
 const commitEngine = require("./commit-engine");
+const releaseNotesEngine = require("./release-notes-engine");
+const dependencyScanner = require("./dependency-scanner");
 const {
   digest,
   randomToken,
@@ -640,7 +642,8 @@ async function runCommitNow(req, res) {
       message: "A commit run is already in progress. Wait for it to finish."
     });
   }
-  const message = commitEngine.defaultCommitMessage();
+  const message = commitEngine.normalizeCommitMessage(body && body.message) || commitEngine.defaultCommitMessage();
+  const mode = (body && body.mode === "commit_local") ? "commit_local" : "commit_push";
   commitRunLock = { accountId: session.profile.id, startedAt: Date.now(), count: selected.length };
 
   try {
@@ -669,6 +672,7 @@ async function runCommitNow(req, res) {
   try {
     const results = await commitEngine.runCommits(selected, {
       message,
+      mode,
       onResult: (result) => send({ type: "result", result })
     });
     const summary = commitEngine.summarize(results);
@@ -681,6 +685,7 @@ async function runCommitNow(req, res) {
         committed: summary.committed,
         pushed: summary.pushed,
         skipped: summary.skipped,
+        blocked: summary.blocked,
         failed: summary.failed,
         repositories: results.map((item) => item.name)
       })
@@ -1489,4 +1494,86 @@ function setSecurityHeaders(req, res, nonce) {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
+}
+
+async function generateReleaseNotes(req, res) {
+  const session = getSession(req);
+  if (!session) return sendJson(res, 401, { error: "unauthorized" });
+  let body;
+  try {
+    body = await readJsonBody(req, res);
+  } catch (e) {
+    body = {};
+  }
+  const snapshot = snapshotStore.get(session.profile.id);
+  const commits = (snapshot && snapshot.payload && snapshot.payload.commits) || [];
+  const grouped = releaseNotesEngine.categorizeCommits(commits);
+  const markdown = releaseNotesEngine.generateMarkdownDigest(grouped, { title: body.title || "Engineering Release Notes & Digest" });
+  return sendJson(res, 200, { markdown, grouped });
+}
+
+async function scanWorkspaceDependencies(req, res) {
+  const session = commitFeatureGuard(req, res, { csrf: true });
+  if (!session) return;
+  let body;
+  try {
+    body = await readJsonBody(req, res);
+  } catch (e) {
+    body = {};
+  }
+  const root = body && body.root;
+  if (typeof root !== "string" || !root.trim()) {
+    return sendJson(res, 400, { error: "invalid_root" });
+  }
+  const scanResult = await commitEngine.scanProjects(root);
+  if (!scanResult.ok) return sendJson(res, 400, scanResult);
+
+  const radar = [];
+  for (const repo of scanResult.repos || []) {
+    const info = await dependencyScanner.scanRepositoryHygieneAndDeps(repo.path);
+    radar.push(info);
+  }
+  return sendJson(res, 200, { repos: radar });
+}
+
+async function exportEncryptedBackup(req, res) {
+  const session = getSession(req);
+  if (!session) return sendJson(res, 401, { error: "unauthorized" });
+  const snapshot = snapshotStore.get(session.profile.id);
+  if (!snapshot) return sendJson(res, 404, { error: "snapshot_missing" });
+  return sendJson(res, 200, { snapshot, exportedAt: Date.now() });
+}
+
+async function importEncryptedBackup(req, res) {
+  const session = getSession(req, { csrf: true });
+  if (!session) return sendJson(res, 401, { error: "unauthorized" });
+  let body;
+  try {
+    body = await readJsonBody(req, res, 25 * 1024 * 1024);
+  } catch (e) {
+    return sendJson(res, 400, { error: "invalid_backup" });
+  }
+  const snapshot = body && body.snapshot;
+  if (!snapshot || !snapshot.payload) return sendJson(res, 400, { error: "invalid_backup" });
+  snapshotStore.put(session.profile.id, session.login, snapshot.payload);
+  return sendJson(res, 200, { ok: true });
+}
+
+async function stashWorkspaceRepos(req, res) {
+  const session = commitFeatureGuard(req, res, { csrf: true });
+  if (!session) return;
+  let body;
+  try {
+    body = await readJsonBody(req, res);
+  } catch (e) {
+    body = {};
+  }
+  const paths = body && Array.isArray(body.paths) ? body.paths : [];
+  const results = [];
+  for (const p of paths) {
+    if (typeof p !== "string" || !path.isAbsolute(p)) continue;
+    const r = await commitEngine.runGit(p, ["stash", "push", "-m", "Logbook auto-stash checkpoint"]);
+    results.push({ path: p, ok: r.ok });
+  }
+  return sendJson(res, 200, { results });
 }

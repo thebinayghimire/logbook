@@ -1489,10 +1489,42 @@
 
         <div aria-live="polite" class="font-label-mono text-[10px] text-on-surface-variant mb-2" id="commit-scan-status">Ready.</div>
 
+        <!-- CONTROLS: MESSAGE, MODE, SELECTION -->
+        <div class="grid md:grid-cols-2 gap-3 mb-3 bg-surface-container-low p-3 border border-outline-variant/60">
+          <div>
+            <label class="block font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant mb-1">Commit Message</label>
+            <div class="flex gap-2">
+              <input class="flex-1 bg-surface border border-outline-variant/70 px-2.5 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="commit-message-input" type="text" placeholder="chore: checkpoint ..."/>
+              <button class="border border-outline-variant/70 px-2.5 py-1.5 font-label-mono text-[9px] uppercase hover:border-primary hover:text-on-surface transition-colors whitespace-nowrap bg-surface" id="btn-commit-timestamp" type="button">Timestamp</button>
+            </div>
+          </div>
+          <div>
+            <label class="block font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant mb-1">Execution Mode</label>
+            <div class="flex gap-2">
+              <select class="flex-1 bg-surface border border-outline-variant/70 px-2.5 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="commit-mode-select">
+                <option value="commit_push">Commit &amp; Push to remote</option>
+                <option value="commit_local">Commit Locally Only (No Push)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2 font-label-mono text-[10px]">
+          <div class="flex items-center gap-2">
+            <button class="underline hover:text-secondary" id="btn-commit-select-all" type="button">Select All</button>
+            <span>·</span>
+            <button class="underline hover:text-secondary" id="btn-commit-deselect-clean" type="button">Deselect Clean</button>
+            <span>·</span>
+            <button class="underline hover:text-secondary" id="btn-commit-deselect-sensitive" type="button">Deselect Sensitive</button>
+          </div>
+          <span class="text-on-surface-variant" id="commit-selection-count">0 selected</span>
+        </div>
+
         <div class="border border-outline-variant/60 overflow-x-auto">
           <table class="w-full font-mono-data text-[11px]">
             <thead>
               <tr class="border-b border-outline-variant/60 font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">
+                <th class="w-8 text-center px-2 py-2"><input type="checkbox" id="commit-check-all" aria-label="Select all safe repositories" title="Select all repositories that are safe to commit"/></th>
                 <th class="text-left px-3 py-2">Repository</th>
                 <th class="text-left px-3 py-2">Branch</th>
                 <th class="text-right px-3 py-2">Changes</th>
@@ -1501,7 +1533,7 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-outline-variant/30" id="commit-preview-body">
-              <tr><td class="px-3 py-3 text-on-surface-variant" colspan="5">Scanning…</td></tr>
+              <tr><td class="px-3 py-3 text-on-surface-variant" colspan="6">Scanning…</td></tr>
             </tbody>
           </table>
         </div>
@@ -1510,9 +1542,20 @@
           <div class="flex items-start gap-2">
             <span class="material-symbols-outlined text-[16px] text-secondary shrink-0">warning</span>
             <div class="min-w-0">
-              <div class="font-label-mono text-[10px] uppercase tracking-wider text-secondary mb-1">LIKELY SENSITIVE FILES IN THIS RUN</div>
+              <div class="font-label-mono text-[10px] uppercase tracking-wider text-secondary mb-1">LIKELY SENSITIVE FILES · REPOSITORIES BLOCKED</div>
               <div class="font-mono-data text-[11px] text-on-surface break-all" id="commit-secret-text"></div>
-              <div class="font-label-mono text-[9px] text-on-surface-variant mt-1">These files are not ignored by Git. Review them before confirming.</div>
+              <div class="font-label-mono text-[9px] text-on-surface-variant mt-1">These files are not ignored by Git. Their repositories are excluded from selection until the files are removed or added to <code>.gitignore</code>.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hidden mt-3 border border-outline-variant/70 bg-surface-container-low p-3" id="commit-artifact-warning">
+          <div class="flex items-start gap-2">
+            <span class="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0">inventory_2</span>
+            <div class="min-w-0">
+              <div class="font-label-mono text-[10px] uppercase tracking-wider text-on-surface mb-1">SUSPICIOUS ARTIFACTS · EXCLUDED OR BLOCKED</div>
+              <div class="font-mono-data text-[11px] text-on-surface break-all" id="commit-artifact-text"></div>
+              <div class="font-label-mono text-[9px] text-on-surface-variant mt-1">Commit Now stages tracked changes and ordinary untracked files only. Binary/cache files, unexpanded paths, untracked folders, and files over 256 KB are left alone and reported here.</div>
             </div>
           </div>
         </div>
@@ -1764,7 +1807,9 @@
       results: [],
       runMessage: "",
       summary: null,
-      error: ""
+      error: "",
+      selectedPaths: {},
+      expandedPaths: {}
     }
   };
 
@@ -4898,9 +4943,24 @@
       merge_conflict: "Merge conflict",
       submodule: "Submodule",
       bare_repo: "Bare repo",
+      sensitive_files: "Blocked · sensitive files",
+      staged_artifacts: "Blocked · staged artifacts",
+      artifacts_only: "Blocked · artifacts only",
+      artifacts_truncated: "Blocked · too many artifacts",
       status_failed: "Status failed"
     };
     return labels[reason] || "Skipped";
+  }
+
+  function artifactReasonLabel(reason) {
+    var labels = {
+      unexpanded_env: "unexpanded env path",
+      binary: "binary/cache file",
+      too_large: "over 256 KB",
+      directory: "untracked folder",
+      outside_repo: "outside repo"
+    };
+    return labels[reason] || "suspicious artifact";
   }
 
   function showCommitFolderView() {
@@ -5067,6 +5127,13 @@
         body: JSON.stringify({ root: root })
       });
       state.commit.scan = data;
+      state.commit.selectedPaths = {};
+      state.commit.expandedPaths = {};
+      (data.repos || []).forEach(function (repo) {
+        if (repo.actionable && !(repo.secrets || []).length && !(repo.artifacts || []).some(function (item) { return item.staged; })) {
+          state.commit.selectedPaths[repo.path.toLowerCase()] = repo.path;
+        }
+      });
       state.commit.scanLoading = false;
       renderCommitPreview();
       var actionable = (data.repos || []).filter(function (repo) { return repo.actionable; });
@@ -5085,7 +5152,10 @@
         committed_pushed: ["COMMITTED + PUSHED", "text-[#2E7D6B]"],
         pushed: ["PUSHED", "text-[#2E7D6B]"],
         committed_no_remote: ["COMMITTED · NO REMOTE", "text-on-surface"],
+        committed_behind_remote: ["COMMITTED · PUSH DEFERRED", "text-secondary"],
         skipped: ["SKIPPED", "text-on-surface-variant"],
+        blocked_sensitive: ["BLOCKED · SENSITIVE FILES", "text-secondary"],
+        blocked_artifacts: ["BLOCKED · ARTIFACTS", "text-secondary"],
         failed: ["FAILED", "text-secondary"],
         committed_push_failed: ["COMMITTED · PUSH FAILED", "text-secondary"],
         push_failed: ["PUSH FAILED", "text-secondary"]
@@ -5102,9 +5172,17 @@
     if (state.commit.running) {
       return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">Pending</div>' };
     }
+    if ((repo.secrets || []).length) {
+      return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider text-secondary">BLOCKED · SENSITIVE FILES</div>' };
+    }
+    if ((repo.artifacts || []).some(function (item) { return item.staged; })) {
+      return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider text-secondary">BLOCKED · STAGED ARTIFACTS</div>' };
+    }
     if (repo.actionable) {
       var label = repo.changed ? "Ready · commit + push" : "Ready · push";
-      return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface">' + label + '</div>' };
+      if (repo.changed && repo.behind > 0) label = "Ready · commit only · " + repo.behind + " behind";
+      if (repo.changed && (repo.artifacts || []).length) label += " · excludes " + repo.artifacts.length;
+      return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface">' + escapeHtml(label) + '</div>' };
     }
     return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">' + escapeHtml(shortSkipLabel(repo.skipReason)) + '</div>' };
   }
@@ -5117,8 +5195,12 @@
     var runBtn = document.getElementById("btn-commit-run");
     var secretBox = document.getElementById("commit-secret-warning");
     var secretText = document.getElementById("commit-secret-text");
+    var artifactBox = document.getElementById("commit-artifact-warning");
+    var artifactText = document.getElementById("commit-artifact-text");
     var rescan = document.getElementById("btn-commit-rescan");
     var changeFolder = document.getElementById("btn-commit-change-folder");
+    var selCountEl = document.getElementById("commit-selection-count");
+    var selectAll = document.getElementById("commit-check-all");
 
     if (rootLabel) rootLabel.textContent = state.commit.root || "—";
     if (rescan) rescan.disabled = state.commit.running || state.commit.scanLoading;
@@ -5126,18 +5208,22 @@
 
     if (state.commit.scanLoading) {
       if (status) status.textContent = "SCANNING FOR GIT REPOSITORIES…";
-      if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="5">Scanning ' + escapeHtml(state.commit.root) + '…</td></tr>';
+      if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="6">Scanning ' + escapeHtml(state.commit.root) + '…</td></tr>';
       if (summary) summary.textContent = "—";
       if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Scanning…"; }
       if (secretBox) secretBox.classList.add("hidden");
+      if (artifactBox) artifactBox.classList.add("hidden");
+      if (selectAll) { selectAll.checked = false; selectAll.indeterminate = false; selectAll.disabled = true; }
       return;
     }
     if (state.commit.error && !state.commit.scan) {
       if (status) status.textContent = "SCAN FAILED";
-      if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-secondary font-mono-data text-[11px]" colspan="5">' + escapeHtml(state.commit.error) + '</td></tr>';
+      if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-secondary font-mono-data text-[11px]" colspan="6">' + escapeHtml(state.commit.error) + '</td></tr>';
       if (summary) summary.textContent = "—";
       if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Commit & push"; }
       if (secretBox) secretBox.classList.add("hidden");
+      if (artifactBox) artifactBox.classList.add("hidden");
+      if (selectAll) { selectAll.checked = false; selectAll.indeterminate = false; selectAll.disabled = true; }
       return;
     }
     if (!state.commit.scan) return;
@@ -5150,9 +5236,10 @@
     });
 
     var secrets = [];
-    actionable.forEach(function (repo) {
+    repos.forEach(function (repo) {
       (repo.secrets || []).forEach(function (file) {
-        if (secrets.indexOf(file) === -1) secrets.push(file);
+        var label = repo.name + " / " + file;
+        if (secrets.indexOf(label) === -1) secrets.push(label);
       });
     });
     if (secretBox && secretText) {
@@ -5167,62 +5254,148 @@
       }
     }
 
+    var artifacts = [];
+    repos.forEach(function (repo) {
+      (repo.artifacts || []).forEach(function (item) {
+        artifacts.push({
+          repo: repo.name,
+          file: item.file,
+          reason: item.reason,
+          staged: Boolean(item.staged)
+        });
+      });
+    });
+    if (artifactBox && artifactText) {
+      if (artifacts.length) {
+        artifactBox.classList.remove("hidden");
+        var shownArtifacts = artifacts.slice(0, 8).map(function (item) {
+          return item.repo + " / " + item.file + " (" + artifactReasonLabel(item.reason) + (item.staged ? ", staged" : "") + ")";
+        }).join(" · ");
+        if (artifacts.length > 8) shownArtifacts += " · +" + (artifacts.length - 8) + " MORE";
+        artifactText.textContent = shownArtifacts;
+      } else {
+        artifactBox.classList.add("hidden");
+        artifactText.textContent = "";
+      }
+    }
+
     var rows = repos.map(function (repo) {
       var result = results[String(repo.path).toLowerCase()];
       var stateInfo = commitPreviewState(repo, result);
+      var key = repo.path.toLowerCase();
+      var isSelected = !!state.commit.selectedPaths[key];
+      var isExpanded = !!state.commit.expandedPaths[key];
+      var stagedArtifacts = (repo.artifacts || []).filter(function (item) { return item.staged; });
+
       var secretIcon = (repo.secrets && repo.secrets.length)
         ? '<span class="material-symbols-outlined text-[12px] text-secondary align-middle ml-1" title="Likely sensitive file: ' + escapeHtml(repo.secrets.join(", ")) + '">warning</span>'
         : "";
+      var artifactIcon = (repo.artifacts && repo.artifacts.length)
+        ? '<span class="material-symbols-outlined text-[12px] text-on-surface-variant align-middle ml-1" title="Suspicious artifact: ' + escapeHtml(repo.artifacts.map(function (item) { return item.file; }).join(", ")) + '">inventory_2</span>'
+        : "";
       var changeText = repo.changed ? String(repo.changeCount) : (repo.ahead ? "↑ " + repo.ahead : "—");
       var remote = repo.remoteLabel || "none";
-      return '<tr class="' + (repo.actionable ? "" : "text-on-surface-variant") + '" data-commit-repo="' + escapeHtml(repo.path) + '">' +
-        '<td class="px-3 py-2 align-top"><div class="flex items-start gap-1 min-w-0"><span class="text-on-surface font-medium truncate" title="' + escapeHtml(repo.path) + '">' + escapeHtml(repo.name) + '</span>' + secretIcon + '</div></td>' +
+      var canSelect = repo.actionable && !(repo.secrets || []).length && !stagedArtifacts.length && !state.commit.running && !state.commit.done;
+
+      var checkbox = canSelect
+        ? '<input type="checkbox" class="commit-repo-check" data-repo-path="' + escapeHtml(repo.path) + '" ' + (isSelected ? "checked" : "") + ' aria-label="Select ' + escapeHtml(repo.name) + '"/>'
+        : '<span class="text-outline-variant">—</span>';
+
+      var changesHtml = "";
+      if (repo.changes && repo.changes.length) {
+        var fileRows = repo.changes.map(function (c) {
+          return '<div class="flex items-center justify-between font-mono-data text-[10px] py-0.5 px-2 hover:bg-surface-container"><span class="truncate text-on-surface">' + escapeHtml(c.file) + '</span><span class="font-label-mono px-1 py-0.2 border border-outline-variant/60 text-[9px] shrink-0">' + escapeHtml(c.code) + '</span></div>';
+        }).join("");
+        changesHtml = '<tr class="' + (isExpanded ? "" : "hidden") + ' bg-surface-container-lowest border-b border-outline-variant/30" data-commit-drawer="' + escapeHtml(repo.path) + '"><td colspan="6" class="p-3"><div class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant mb-1">Changed Files / Working Tree Status</div><div class="max-h-36 overflow-y-auto border border-outline-variant/50">' + fileRows + '</div></td></tr>';
+      }
+
+      var mainRow = '<tr class="hover:bg-surface-container/50 transition-colors cursor-pointer commit-row-item" data-repo-path="' + escapeHtml(repo.path) + '">' +
+        '<td class="w-8 text-center px-2 py-2 align-top" onclick="event.stopPropagation();">' + checkbox + '</td>' +
+        '<td class="px-3 py-2 align-top"><div class="flex items-start gap-1 min-w-0"><span class="text-on-surface font-medium truncate underline underline-offset-2" title="' + escapeHtml(repo.path) + '">' + escapeHtml(repo.name) + '</span>' + secretIcon + artifactIcon + '</div><div class="font-mono-data text-[9px] text-on-surface-variant truncate">' + escapeHtml(repo.path) + '</div></td>' +
         '<td class="px-3 py-2 align-top">' + escapeHtml(repo.branch || "—") + '</td>' +
         '<td class="px-3 py-2 align-top text-right tabular-nums">' + escapeHtml(changeText) + '</td>' +
-        '<td class="px-3 py-2 align-top hidden md:table-cell"><span class="block max-w-[18rem] truncate" title="' + escapeHtml(repo.remoteLabel || "") + '">' + escapeHtml(remote) + '</span></td>' +
+        '<td class="px-3 py-2 align-top hidden md:table-cell"><span class="block max-w-[16rem] truncate" title="' + escapeHtml(repo.remoteLabel || "") + '">' + escapeHtml(remote) + '</span></td>' +
         '<td class="px-3 py-2 align-top">' + stateInfo.html + '</td>' +
         '</tr>';
-    }).join("");
-    if (body) body.innerHTML = rows || '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="5">No Git repositories found under this folder.</td></tr>';
 
-    var commitCount = actionable.filter(function (repo) { return repo.changed; }).length;
-    var pushOnlyCount = actionable.filter(function (repo) { return !repo.changed; }).length;
-    var fileCount = actionable.reduce(function (sum, repo) { return sum + (repo.changeCount || 0); }, 0);
+      return mainRow + changesHtml;
+    }).join("");
+
+    if (body) {
+      body.innerHTML = rows || '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="6">No Git repositories found under this folder.</td></tr>';
+      body.querySelectorAll(".commit-repo-check").forEach(function (chk) {
+        chk.addEventListener("change", function () {
+          var orig = chk.getAttribute("data-repo-path");
+          var p = orig.toLowerCase();
+          if (chk.checked) state.commit.selectedPaths[p] = orig;
+          else delete state.commit.selectedPaths[p];
+          renderCommitPreview();
+        });
+      });
+      body.querySelectorAll(".commit-row-item").forEach(function (row) {
+        row.addEventListener("click", function () {
+          var p = row.getAttribute("data-repo-path").toLowerCase();
+          state.commit.expandedPaths[p] = !state.commit.expandedPaths[p];
+          renderCommitPreview();
+        });
+      });
+    }
+
+    var selectedRepos = actionable.filter(function (repo) { return !!state.commit.selectedPaths[repo.path.toLowerCase()]; });
+    var selectedCount = selectedRepos.length;
+    var blockedCount = repos.filter(function (repo) { return Boolean(repo.blocked); }).length;
+    var excludedCount = artifacts.filter(function (item) { return !item.staged; }).length;
+    if (selCountEl) selCountEl.textContent = selectedCount + " selected";
+    if (selectAll) {
+      selectAll.disabled = !actionable.length || state.commit.running || state.commit.done;
+      selectAll.checked = actionable.length > 0 && selectedCount === actionable.length;
+      selectAll.indeterminate = selectedCount > 0 && selectedCount < actionable.length;
+    }
+
+    var commitCount = selectedRepos.filter(function (repo) { return repo.changed; }).length;
+    var pushOnlyCount = selectedRepos.filter(function (repo) { return !repo.changed; }).length;
+    var fileCount = selectedRepos.reduce(function (sum, repo) { return sum + (repo.changeCount || 0); }, 0);
 
     if (state.commit.running) {
       var doneCount = state.commit.results.length;
-      if (status) status.textContent = "COMMITTING " + Math.min(doneCount + 1, actionable.length) + " / " + actionable.length + (state.commit.runMessage ? " · " + state.commit.runMessage : "");
+      if (status) status.textContent = "COMMITTING " + Math.min(doneCount + 1, selectedCount) + " / " + selectedCount + (state.commit.runMessage ? " · " + state.commit.runMessage : "");
       if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Running…"; }
     } else if (state.commit.done) {
       if (state.commit.error) {
         if (status) status.textContent = "RUN INTERRUPTED · " + state.commit.error;
       } else {
-        var summaryData = state.commit.summary || { committed: 0, pushed: 0, skipped: 0, failed: 0 };
-        if (status) status.textContent = "FINISHED · " + summaryData.committed + " COMMITTED · " + summaryData.pushed + " PUSHED · " + summaryData.failed + " FAILED";
+        var summaryData = state.commit.summary || { committed: 0, pushed: 0, skipped: 0, blocked: 0, failed: 0 };
+        if (status) status.textContent = "FINISHED · " + summaryData.committed + " COMMITTED · " + summaryData.pushed + " PUSHED · " + (summaryData.blocked || 0) + " BLOCKED · " + summaryData.failed + " FAILED";
       }
       if (runBtn) { runBtn.disabled = false; runBtn.textContent = "Done"; }
     } else {
       if (status) {
-        status.textContent = state.commit.error
-          ? "COULD NOT START · " + state.commit.error
-          : "SCANNED " + repos.length + " REPOSITOR" + (repos.length === 1 ? "Y" : "IES") + (state.commit.scan.truncated ? " · SCAN TRUNCATED, CHOOSE A NARROWER FOLDER" : "");
+        var scanBits = ["SCANNED " + repos.length + " REPOSITOR" + (repos.length === 1 ? "Y" : "IES")];
+        if (selectedCount) scanBits.push(selectedCount + " SELECTED");
+        if (blockedCount) scanBits.push(blockedCount + " BLOCKED");
+        if (excludedCount) scanBits.push(excludedCount + " ARTIFACTS EXCLUDED");
+        if (state.commit.scan.truncated) scanBits.push("SCAN TRUNCATED, CHOOSE A NARROWER FOLDER");
+        status.textContent = state.commit.error ? "COULD NOT START · " + state.commit.error : scanBits.join(" · ");
       }
       if (runBtn) {
-        runBtn.disabled = actionable.length === 0;
-        runBtn.textContent = actionable.length ? "Commit & push " + actionable.length : "Nothing to commit";
-        if (actionable.length && pushOnlyCount && !commitCount) runBtn.textContent = "Push " + actionable.length;
+        var modeSelect = document.getElementById("commit-mode-select");
+        var localOnly = modeSelect && modeSelect.value === "commit_local";
+        runBtn.disabled = selectedCount === 0;
+        if (selectedCount) runBtn.textContent = (localOnly ? "Commit " : "Commit & push ") + selectedCount;
+        else runBtn.textContent = actionable.length ? "Select repositories" : "Nothing to commit";
       }
     }
 
     if (summary) {
-      if (!actionable.length) {
+      if (!selectedCount && !blockedCount && !excludedCount) {
         summary.textContent = "ALL REPOSITORIES CLEAN · NOTHING TO COMMIT OR PUSH";
       } else {
-        var bits = [actionable.length + " REPOSITOR" + (actionable.length === 1 ? "Y" : "IES")];
+        var bits = [selectedCount + " REPOSITOR" + (selectedCount === 1 ? "Y" : "IES") + " SELECTED"];
         if (fileCount) bits.push(fileCount + " FILE" + (fileCount === 1 ? "" : "S"));
         if (commitCount) bits.push(commitCount + " TO COMMIT");
         if (pushOnlyCount) bits.push(pushOnlyCount + " PUSH ONLY");
-        if (secrets.length) bits.push(secrets.length + " SENSITIVE");
+        if (blockedCount) bits.push(blockedCount + " BLOCKED");
+        if (excludedCount) bits.push(excludedCount + " ARTIFACTS EXCLUDED");
         summary.textContent = bits.join(" · ");
       }
     }
@@ -5263,9 +5436,13 @@
   async function runCommitNow() {
     if (state.commit.running) return;
     if (state.commit.done) { closeAllModals(); return; }
-    if (!state.commit.scan) return;
-    var actionable = (state.commit.scan.repos || []).filter(function (repo) { return repo.actionable; });
-    if (!actionable.length) return;
+    var paths = Object.values(state.commit.selectedPaths).filter(function (p) { return typeof p === "string" && p; });
+    if (!paths.length) return;
+
+    var msgInput = document.getElementById("commit-message-input");
+    var modeSelect = document.getElementById("commit-mode-select");
+    var customMsg = msgInput && msgInput.value.trim();
+    var execMode = modeSelect ? modeSelect.value : "commit_push";
 
     state.commit.running = true;
     state.commit.done = false;
@@ -5283,7 +5460,9 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           root: state.commit.root,
-          paths: actionable.map(function (repo) { return repo.path; })
+          paths: paths,
+          message: customMsg || undefined,
+          mode: execMode
         })
       });
     } catch (e) {
@@ -5327,9 +5506,13 @@
     renderCommitPreview();
     var failed = state.commit.results.filter(function (result) { return result.failed; }).length;
     showToast(failed ? "COMMIT RUN FINISHED · " + failed + " FAILED" : "COMMIT RUN FINISHED");
-  }
 
-  function commandItems() {
+    // Automatically re-sync dashboard so pushed commits appear instantly in Now and Push Log
+    try {
+      await reloadAccount(state.username, true);
+    } catch (e) {}
+  }
+function commandItems() {
     var items = [
       { label: "Jump to 01 — NOW (latest push)", category: "SECTION", action: function () { scrollToSec("section-now"); } },
       { label: "Jump to 02 — PULSE (KPIs)", category: "SECTION", action: function () { scrollToSec("section-pulse"); } },
@@ -6125,6 +6308,52 @@
       showToast("AUDIO " + (soundEnabled ? "ON" : "MUTED"));
     });
     document.getElementById("btn-commit-now").addEventListener("click", function () { openCommitModal(); });
+    document.getElementById("btn-commit-select-all").addEventListener("click", function () {
+      if (!state.commit.scan || !state.commit.scan.repos) return;
+      state.commit.selectedPaths = {};
+      state.commit.scan.repos.forEach(function (r) {
+        if (r.actionable && !(r.secrets || []).length) state.commit.selectedPaths[r.path.toLowerCase()] = r.path;
+      });
+      renderCommitPreview();
+    });
+    document.getElementById("btn-commit-deselect-clean").addEventListener("click", function () {
+      if (!state.commit.scan || !state.commit.scan.repos) return;
+      state.commit.selectedPaths = {};
+      state.commit.scan.repos.forEach(function (r) {
+        if (r.actionable && r.changed) state.commit.selectedPaths[r.path.toLowerCase()] = r.path;
+      });
+      renderCommitPreview();
+    });
+    document.getElementById("btn-commit-deselect-sensitive").addEventListener("click", function () {
+      if (!state.commit.scan || !state.commit.scan.repos) return;
+      state.commit.scan.repos.forEach(function (r) {
+        if (r.secrets && r.secrets.length) delete state.commit.selectedPaths[r.path.toLowerCase()];
+      });
+      renderCommitPreview();
+    });
+    document.getElementById("commit-check-all").addEventListener("change", function () {
+      var checked = this.checked;
+      if (!state.commit.scan || !state.commit.scan.repos) return;
+      state.commit.selectedPaths = {};
+      if (checked) {
+        state.commit.scan.repos.forEach(function (r) {
+          if (r.actionable && !(r.secrets || []).length) state.commit.selectedPaths[r.path.toLowerCase()] = r.path;
+        });
+      }
+      renderCommitPreview();
+    });
+    document.getElementById("commit-mode-select").addEventListener("change", function () {
+      renderCommitPreview();
+    });
+    document.getElementById("btn-commit-timestamp").addEventListener("click", function () {
+      var input = document.getElementById("commit-message-input");
+      if (input) {
+        var now = new Date();
+        var pad = function (n) { return String(n).padStart(2, "0"); };
+        var ts = now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate()) + " " + pad(now.getHours()) + ":" + pad(now.getMinutes());
+        input.value = "chore: checkpoint " + ts;
+      }
+    });
     document.getElementById("btn-close-commit").addEventListener("click", closeAllModals);
     document.getElementById("btn-commit-folder-cancel").addEventListener("click", closeAllModals);
     document.getElementById("btn-commit-close-preview").addEventListener("click", closeAllModals);
