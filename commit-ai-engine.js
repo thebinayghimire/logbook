@@ -12,8 +12,8 @@ const path = require("path");
 const fs = require("fs");
 const { execFile } = require("child_process");
 
-const MAX_DIFF_BYTES = 12 * 1024;
-const PROVIDER_TIMEOUT_MS = 8_000;
+const MAX_DIFF_BYTES = 6 * 1024;
+const PROVIDER_TIMEOUT_MS = 4_000;
 const CONVENTIONAL_COMMIT_RE = /^(feat|fix|refactor|docs|chore|test|perf|style)(\([a-z0-9][a-z0-9._/-]*\))?: [^\r\n]+$/;
 const ALLOWED_TYPES = new Set(["feat", "fix", "refactor", "docs", "chore", "test", "perf", "style"]);
 const SECRET_FILE_RE = /(^|\/)(?:\.env(?:\.[^/]*)?|\.envrc|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.htpasswd|id_(?:rsa|dsa|ecdsa|ed25519)|credentials?(?:\.[^/]*)?|secrets?(?:\.[^/]*)?|client[_-]?secret[^/]*|service[-_]?account[^/]*|firebase[-_]?adminsdk[^/]*|[^/]*(?:token|apikey|api_key)[^/]*)$/i;
@@ -450,13 +450,23 @@ async function suggestCommitMessages(repoPaths, options = {}) {
     try {
       const result = await provider(prompt, options);
       const suggestions = completeSuggestions(result.content, fallback);
-      if (suggestions.length === 3) return Object.assign({}, result, { suggestions });
+      
+      if (suggestions.length === 3) {
+        const res = Object.assign({}, result, { suggestions });
+        suggestionCache.set(cacheKey, { at: Date.now(), result: res });
+        return res;
+      }
+
     } catch (error) {
       // Provider discovery is best effort. The deterministic fallback below is
       // part of the product contract, not an error state.
     }
   }
-  return { provider: "heuristic", model: null, suggestions: fallback };
+  
+  const res = { provider: "heuristic", model: null, suggestions: fallback };
+  suggestionCache.set(cacheKey, { at: Date.now(), result: res });
+  return res;
+
 }
 
 async function getLocalAiStatus(options = {}) {

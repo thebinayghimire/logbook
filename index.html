@@ -263,6 +263,10 @@
       100% { opacity: 1; transform: translateY(0); }
     }
     #btn-commit-run .commit-run-check {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
       width: 0;
       overflow: hidden;
       opacity: 0;
@@ -1678,9 +1682,9 @@
           <div class="flex items-center gap-2">
             <button class="underline hover:text-secondary" id="btn-commit-select-all" type="button">Select All</button>
             <span>·</span>
-            <button class="underline hover:text-secondary" id="btn-commit-deselect-clean" type="button">Deselect Clean</button>
-            <span>·</span>
             <button class="underline hover:text-secondary" id="btn-commit-deselect-sensitive" type="button">Deselect Sensitive</button>
+            <span id="commit-toggle-clean-divider" class="hidden">·</span>
+            <button class="hidden underline hover:text-secondary" id="btn-commit-toggle-clean" type="button">Show clean (0)</button>
           </div>
           <span class="text-on-surface-variant" id="commit-selection-count">0 selected</span>
         </div>
@@ -2093,6 +2097,7 @@
       error: "",
       selectedPaths: {},
       expandedPaths: {},
+      showCleanRepos: false,
       ai: {
         loading: false,
         suggestions: [],
@@ -5291,6 +5296,11 @@
     state.commit.summary = null;
     state.commit.done = false;
     state.commit.runMessage = "";
+    state.commit.runTotal = 0;
+    if (state.commit.successTimer) {
+      clearTimeout(state.commit.successTimer);
+      state.commit.successTimer = null;
+    }
     state.commit.ai.suggestions = [];
     state.commit.ai.error = "";
     renderCommitAi();
@@ -5415,6 +5425,11 @@
     state.commit.results = [];
     state.commit.summary = null;
     state.commit.runMessage = "";
+    state.commit.runTotal = 0;
+    if (state.commit.successTimer) {
+      clearTimeout(state.commit.successTimer);
+      state.commit.successTimer = null;
+    }
     state.commit.ai.suggestions = [];
     state.commit.ai.error = "";
     renderCommitPreview();
@@ -5427,11 +5442,17 @@
       state.commit.scan = data;
       state.commit.selectedPaths = {};
       state.commit.expandedPaths = {};
+      var modifiedRepos = (data.repos || []).filter(function (repo) {
+        return repo.changed || (repo.actionable && repo.ahead > 0);
+      });
       (data.repos || []).forEach(function (repo) {
         if (repo.actionable && !(repo.secrets || []).length && !(repo.artifacts || []).some(function (item) { return item.staged; })) {
           state.commit.selectedPaths[repo.path.toLowerCase()] = repo.path;
         }
       });
+      if (modifiedRepos.length === 1) {
+        state.commit.expandedPaths[modifiedRepos[0].path.toLowerCase()] = true;
+      }
       state.commit.scanLoading = false;
       renderCommitPreview();
       var actionable = (data.repos || []).filter(function (repo) { return repo.actionable; });
@@ -5596,13 +5617,32 @@
     return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">' + escapeHtml(shortSkipLabel(repo.skipReason)) + '</div>' };
   }
 
+  function setCommitRunButton(label, runState, progress, disabled) {
+    var btn = document.getElementById("btn-commit-run");
+    if (!btn) return;
+    var stateName = runState || "idle";
+    var percent = Math.max(0, Math.min(100, Number(progress) || 0));
+    btn.disabled = Boolean(disabled);
+    btn.setAttribute("data-commit-run-state", stateName);
+    btn.setAttribute("aria-busy", stateName === "running" ? "true" : "false");
+    btn.style.setProperty("--commit-progress", percent + "%");
+    var fill = document.getElementById("commit-run-fill");
+    if (fill) fill.style.width = percent + "%";
+    var labelEl = document.getElementById("commit-run-label");
+    if (labelEl && labelEl.textContent !== label) {
+      labelEl.textContent = label;
+      labelEl.classList.remove("is-swapping");
+      void labelEl.offsetWidth;
+      labelEl.classList.add("is-swapping");
+    }
+  }
+
   function renderCommitPreview() {
     renderCommitAi();
     var rootLabel = document.getElementById("commit-root-label");
     var status = document.getElementById("commit-scan-status");
     var body = document.getElementById("commit-preview-body");
     var summary = document.getElementById("commit-preview-summary");
-    var runBtn = document.getElementById("btn-commit-run");
     var secretBox = document.getElementById("commit-secret-warning");
     var secretText = document.getElementById("commit-secret-text");
     var artifactBox = document.getElementById("commit-artifact-warning");
@@ -5620,7 +5660,7 @@
       if (status) status.textContent = "SCANNING FOR GIT REPOSITORIES…";
       if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="6">Scanning ' + escapeHtml(state.commit.root) + '…</td></tr>';
       if (summary) summary.textContent = "—";
-      if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Scanning…"; }
+      setCommitRunButton("Scanning…", "idle", 0, true);
       if (secretBox) secretBox.classList.add("hidden");
       if (artifactBox) artifactBox.classList.add("hidden");
       if (selectAll) { selectAll.checked = false; selectAll.indeterminate = false; selectAll.disabled = true; }
@@ -5630,7 +5670,7 @@
       if (status) status.textContent = "SCAN FAILED";
       if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-secondary font-mono-data text-[11px]" colspan="6">' + escapeHtml(state.commit.error) + '</td></tr>';
       if (summary) summary.textContent = "—";
-      if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Commit & push"; }
+      setCommitRunButton("Commit & push", "idle", 0, true);
       if (secretBox) secretBox.classList.add("hidden");
       if (artifactBox) artifactBox.classList.add("hidden");
       if (selectAll) { selectAll.checked = false; selectAll.indeterminate = false; selectAll.disabled = true; }
@@ -5640,9 +5680,18 @@
 
     var repos = state.commit.scan.repos || [];
     var actionable = repos.filter(function (repo) { return repo.actionable; });
+    var cleanRepos = repos.filter(function (repo) { return !repo.changed && !repo.actionable; });
+    var cleanCount = cleanRepos.length;
+
     var results = {};
     state.commit.results.forEach(function (result) {
       results[String(result.path).toLowerCase()] = result;
+    });
+
+    var displayRepos = repos.filter(function (repo) {
+      if (state.commit.showCleanRepos) return true;
+      var hasResult = Boolean(results[String(repo.path).toLowerCase()]);
+      return repo.changed || repo.actionable || hasResult || (repo.secrets && repo.secrets.length) || (repo.artifacts && repo.artifacts.length);
     });
 
     var secrets = [];
@@ -5689,7 +5738,7 @@
       }
     }
 
-    var rows = repos.map(function (repo) {
+    var rows = displayRepos.map(function (repo) {
       var result = results[String(repo.path).toLowerCase()];
       var stateInfo = commitPreviewState(repo, result);
       var key = repo.path.toLowerCase();
@@ -5732,7 +5781,14 @@
     }).join("");
 
     if (body) {
-      body.innerHTML = rows || '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="6">No Git repositories found under this folder.</td></tr>';
+      if (!displayRepos.length) {
+        var emptyMsg = repos.length
+          ? "All " + repos.length + " repositories are clean · No uncommitted changes found."
+          : "No Git repositories found under this folder.";
+        body.innerHTML = '<tr><td class="px-3 py-6 text-center text-on-surface-variant font-mono-data text-[11px]" colspan="6">' + escapeHtml(emptyMsg) + '</td></tr>';
+      } else {
+        body.innerHTML = rows;
+      }
       body.querySelectorAll(".commit-repo-check").forEach(function (chk) {
         chk.addEventListener("change", function () {
           var orig = chk.getAttribute("data-repo-path");
@@ -5768,32 +5824,59 @@
     var fileCount = selectedRepos.reduce(function (sum, repo) { return sum + (repo.changeCount || 0); }, 0);
 
     if (state.commit.running) {
-      var doneCount = state.commit.results.length;
-      if (status) status.textContent = "COMMITTING " + Math.min(doneCount + 1, selectedCount) + " / " + selectedCount + (state.commit.runMessage ? " · " + state.commit.runMessage : "");
-      if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Running…"; }
+      var runTotal = Math.max(1, state.commit.runTotal || selectedCount || 1);
+      var doneCount = Math.min(state.commit.results.length, runTotal);
+      var progress = Math.min(100, Math.round((doneCount / runTotal) * 100));
+      if (status) status.textContent = "COMMITTING " + Math.min(doneCount + 1, runTotal) + " / " + runTotal + (state.commit.runMessage ? " · " + state.commit.runMessage : "");
+      setCommitRunButton(doneCount >= runTotal ? "Finalizing…" : "Committing " + Math.min(doneCount + 1, runTotal) + " / " + runTotal, "running", progress, true);
     } else if (state.commit.done) {
+      var summaryData = state.commit.summary || { committed: 0, pushed: 0, skipped: 0, blocked: 0, failed: 0 };
+      var failedCount = Math.max(summaryData.failed || 0, state.commit.results.filter(function (result) { return result.failed; }).length);
+      var cleanFinish = !state.commit.error && failedCount === 0;
       if (state.commit.error) {
         if (status) status.textContent = "RUN INTERRUPTED · " + state.commit.error;
       } else {
-        var summaryData = state.commit.summary || { committed: 0, pushed: 0, skipped: 0, blocked: 0, failed: 0 };
-        if (status) status.textContent = "FINISHED · " + summaryData.committed + " COMMITTED · " + summaryData.pushed + " PUSHED · " + (summaryData.blocked || 0) + " BLOCKED · " + summaryData.failed + " FAILED";
+        if (status) status.textContent = "FINISHED · " + summaryData.committed + " COMMITTED · " + summaryData.pushed + " PUSHED · " + (summaryData.blocked || 0) + " BLOCKED · " + failedCount + " FAILED";
       }
-      if (runBtn) { runBtn.disabled = false; runBtn.textContent = "Done"; }
+      setCommitRunButton(cleanFinish ? "Done" : "Finished", cleanFinish ? "success" : "done", 100, false);
     } else {
       if (status) {
-        var scanBits = ["SCANNED " + repos.length + " REPOSITOR" + (repos.length === 1 ? "Y" : "IES")];
+        var scanBits = [];
+        if (displayRepos.length === 1 && displayRepos[0].changed) {
+          scanBits.push("FOUND 1 REPOSITORY WITH MODIFIED FILES (" + displayRepos[0].name.toUpperCase() + ")");
+        } else if (displayRepos.length > 0) {
+          scanBits.push("FOUND " + displayRepos.length + " REPOSITORIES WITH MODIFICATIONS");
+        } else {
+          scanBits.push("ALL " + repos.length + " REPOSITORIES CLEAN");
+        }
+        if (cleanCount > 0 && !state.commit.showCleanRepos) {
+          scanBits.push(cleanCount + " UNCHECKED / CLEAN HIDDEN");
+        }
         if (selectedCount) scanBits.push(selectedCount + " SELECTED");
         if (blockedCount) scanBits.push(blockedCount + " BLOCKED");
         if (excludedCount) scanBits.push(excludedCount + " ARTIFACTS EXCLUDED");
         if (state.commit.scan.truncated) scanBits.push("SCAN TRUNCATED, CHOOSE A NARROWER FOLDER");
         status.textContent = state.commit.error ? "COULD NOT START · " + state.commit.error : scanBits.join(" · ");
       }
-      if (runBtn) {
-        var modeSelect = document.getElementById("commit-mode-select");
-        var localOnly = modeSelect && modeSelect.value === "commit_local";
-        runBtn.disabled = selectedCount === 0;
-        if (selectedCount) runBtn.textContent = (localOnly ? "Commit " : "Commit & push ") + selectedCount;
-        else runBtn.textContent = actionable.length ? "Select repositories" : "Nothing to commit";
+      var modeSelect = document.getElementById("commit-mode-select");
+      var localOnly = modeSelect && modeSelect.value === "commit_local";
+      var idleLabel = actionable.length ? "Select repositories" : "Nothing to commit";
+      if (selectedCount) idleLabel = (localOnly ? "Commit " : "Commit & push ") + selectedCount;
+      setCommitRunButton(idleLabel, "idle", 0, selectedCount === 0);
+    }
+
+    var toggleCleanBtn = document.getElementById("btn-commit-toggle-clean");
+    var toggleCleanDivider = document.getElementById("commit-toggle-clean-divider");
+    if (toggleCleanBtn && toggleCleanDivider) {
+      if (cleanCount > 0) {
+        toggleCleanBtn.classList.remove("hidden");
+        toggleCleanDivider.classList.remove("hidden");
+        toggleCleanBtn.textContent = state.commit.showCleanRepos
+          ? "Hide clean (" + cleanCount + ")"
+          : "Show clean (" + cleanCount + ")";
+      } else {
+        toggleCleanBtn.classList.add("hidden");
+        toggleCleanDivider.classList.add("hidden");
       }
     }
 
@@ -5861,6 +5944,11 @@
     state.commit.summary = null;
     state.commit.error = "";
     state.commit.runMessage = "";
+    state.commit.runTotal = paths.length;
+    if (state.commit.successTimer) {
+      clearTimeout(state.commit.successTimer);
+      state.commit.successTimer = null;
+    }
     renderCommitPreview();
     playSound("relay");
 
@@ -5880,6 +5968,7 @@
       state.commit.running = false;
       state.commit.error = commitErrorLabel(e);
       renderCommitPreview();
+      showToast("COMMIT REQUEST FAILED \u00B7 " + state.commit.error);
       return;
     }
     if (!res.ok) {
@@ -5888,7 +5977,7 @@
       state.commit.running = false;
       state.commit.error = (data && (data.message || data.error)) || ("Bridge " + res.status);
       renderCommitPreview();
-      showToast("COMMIT RUN COULD NOT START");
+      showToast("COMMIT BLOCKED \u00B7 " + state.commit.error);
       return;
     }
 
@@ -5915,8 +6004,20 @@
     state.commit.done = true;
     if (streamError) state.commit.error = streamError;
     renderCommitPreview();
-    var failed = state.commit.results.filter(function (result) { return result.failed; }).length;
+    var finishedSummary = state.commit.summary || {};
+    var failed = Math.max(
+      state.commit.results.filter(function (result) { return result.failed; }).length,
+      finishedSummary.failed || 0
+    );
+    var positiveFinish = !state.commit.error && failed === 0 && (finishedSummary.blocked || 0) === 0 &&
+      ((finishedSummary.committed || 0) + (finishedSummary.pushed || 0) > 0);
     showToast(failed ? "COMMIT RUN FINISHED · " + failed + " FAILED" : "COMMIT RUN FINISHED");
+    if (positiveFinish) {
+      state.commit.successTimer = setTimeout(function () {
+        state.commit.successTimer = null;
+        playSound("success");
+      }, 240);
+    }
 
     // Automatically re-sync dashboard so pushed commits appear instantly in Now and Push Log
     try {
@@ -6873,15 +6974,13 @@ function renderCommandResults(query) {
       clearCommitAiSuggestions();
       renderCommitPreview();
     });
-    document.getElementById("btn-commit-deselect-clean").addEventListener("click", function () {
-      if (!state.commit.scan || !state.commit.scan.repos) return;
-      state.commit.selectedPaths = {};
-      state.commit.scan.repos.forEach(function (r) {
-        if (r.actionable && r.changed) state.commit.selectedPaths[r.path.toLowerCase()] = r.path;
+    var toggleCleanBtnEl = document.getElementById("btn-commit-toggle-clean");
+    if (toggleCleanBtnEl) {
+      toggleCleanBtnEl.addEventListener("click", function () {
+        state.commit.showCleanRepos = !state.commit.showCleanRepos;
+        renderCommitPreview();
       });
-      clearCommitAiSuggestions();
-      renderCommitPreview();
-    });
+    }
     document.getElementById("btn-commit-deselect-sensitive").addEventListener("click", function () {
       if (!state.commit.scan || !state.commit.scan.repos) return;
       state.commit.scan.repos.forEach(function (r) {
