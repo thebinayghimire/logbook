@@ -929,12 +929,26 @@ async function runCommits(paths, options = {}) {
   }
   return results;
 }
-async function undoLastCommit(repoPath) {
-  const result = await runGit(repoPath, ["reset", "--soft", "HEAD~1"]);
-  if (!result.ok) {
-    return { ok: false, error: sanitizeGitOutput(result.stderr || result.stdout) || "git reset failed" };
-  }
-  return { ok: true };
-}
-  undoLastCommit
+module.exports = {
+  DEFAULT_MAX_DEPTH,
+  artifactReasonLabel,
+  defaultCommitMessage,
+  formatTimestamp,
+  inspectRepo,
+  isLikelySecret,
+  isPathInside,
+  listDirectories,
+  normalizeCommitMessage,
+  normalizeUserPath,
+  parseStatus,
+  remoteLabel,
+  resolveDirectory,
+  runCommit,
+  runCommits,
+  runGit,
+  samePath,
+  sanitizeGitOutput,
+  scanProjects,
+  skipReasonLabel,
+  summarize
 };
