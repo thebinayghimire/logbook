@@ -373,6 +373,10 @@
         </div>
 
         <div class="flex items-center gap-2 shrink-0">
+          <button aria-label="Commit and push local project changes" class="hidden items-center gap-1.5 h-8 px-2.5 bg-primary text-surface hover:bg-secondary font-label-mono text-[10px] uppercase tracking-wider transition-colors shrink-0" id="btn-commit-now" title="Commit and push uncommitted changes in your local projects (local only)" type="button">
+            <span class="material-symbols-outlined text-[14px]">commit</span>
+            <span class="hidden sm:inline">Commit now</span>
+          </button>
           <button class="hidden md:flex items-center gap-1.5 whitespace-nowrap text-on-surface-variant hover:text-on-surface font-label-mono text-[10px] px-2.5 h-8 border border-transparent hover:border-outline-variant/50 transition-colors" id="btn-sync" title="Click to re-sync GitHub telemetry" type="button">
             <span class="material-symbols-outlined text-[14px] text-on-surface-variant transition-transform duration-500" id="sync-icon">refresh</span>
             <span id="sync-label">Synced 2m ago</span>
@@ -1432,6 +1436,102 @@
     </div>
   </div>
 
+  <!-- 6. COMMIT NOW / LOCAL REPOSITORIES MODAL -->
+  <div aria-hidden="true" aria-labelledby="commit-modal-title" aria-modal="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-20 px-4 pb-6 overflow-y-auto" id="commit-modal" role="dialog">
+    <div class="w-full max-w-4xl bg-surface border-2 border-primary text-on-surface p-5">
+      <div class="flex items-center justify-between gap-3 pb-3 border-b border-outline-variant/50 mb-4">
+        <div class="flex items-center space-x-2 min-w-0">
+          <span class="w-2 h-2 bg-secondary shrink-0"></span>
+          <span class="font-label-mono-bold uppercase tracking-widest truncate" id="commit-modal-title">COMMIT NOW / LOCAL WORKING TREES</span>
+        </div>
+        <button class="font-label-mono text-label-mono hover:text-secondary shrink-0" id="btn-close-commit" type="button">[x]</button>
+      </div>
+
+      <p class="font-body-sm text-body-sm text-on-surface-variant mb-4" id="commit-intro">
+        Choose the folder that holds your projects. Logbook scans it on this machine, previews every change, and only commits after you confirm. Pushes use your existing git credentials, never the Logbook token.
+      </p>
+
+      <!-- FOLDER PICKER -->
+      <div id="commit-folder-view">
+        <div class="flex flex-wrap items-center gap-2 mb-2">
+          <button aria-label="Parent folder" class="w-8 h-8 flex items-center justify-center border border-outline-variant/60 hover:border-primary hover:bg-surface-container transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed" id="btn-commit-folder-up" title="Parent folder" type="button">
+            <span class="material-symbols-outlined text-[16px]">arrow_upward</span>
+          </button>
+          <input aria-label="Folder path" autocomplete="off" class="flex-1 min-w-[180px] bg-transparent border border-primary px-3 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="commit-folder-path" spellcheck="false" type="text"/>
+          <button class="border border-primary px-3 py-1.5 font-label-mono text-label-mono uppercase font-semibold hover:bg-primary hover:text-surface transition-colors shrink-0" id="btn-commit-folder-go" type="button">Go</button>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 mb-3 font-label-mono text-[10px] text-on-surface-variant" id="commit-folder-shortcuts"></div>
+        <div class="border border-outline-variant/60 max-h-[22rem] overflow-y-auto divide-y divide-outline-variant/30" id="commit-folder-list">
+          <div class="p-3 font-mono-data text-[11px] text-on-surface-variant">Reading folders…</div>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 mt-3 pt-3 border-t border-outline-variant/50">
+          <span class="font-label-mono text-[10px] text-on-surface-variant" id="commit-folder-hint">Choose a folder, then use it as your projects root.</span>
+          <div class="flex items-center gap-2">
+            <button class="border border-outline-variant/70 px-3 py-1.5 font-label-mono text-[10px] uppercase hover:border-secondary hover:text-secondary transition-colors" id="btn-commit-folder-cancel" type="button">Cancel</button>
+            <button class="bg-primary text-surface hover:bg-secondary px-4 py-1.5 font-label-mono text-[10px] uppercase font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed" id="btn-commit-use-folder" type="button" disabled>Use this folder</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PREVIEW / RUN -->
+      <div class="hidden" id="commit-preview-view">
+        <div class="flex flex-wrap items-center justify-between gap-2 border border-outline-variant/60 bg-surface-container-low px-3 py-2 mb-3">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="material-symbols-outlined text-[14px] text-on-surface-variant shrink-0">folder</span>
+            <span class="font-mono-data text-[11px] text-on-surface truncate" id="commit-root-label">—</span>
+          </div>
+          <div class="flex items-center gap-2 font-label-mono text-[10px] uppercase shrink-0">
+            <button class="underline underline-offset-4 hover:text-secondary disabled:opacity-40 disabled:cursor-not-allowed" id="btn-commit-change-folder" type="button">Change folder</button>
+            <span class="text-on-surface-variant">·</span>
+            <button class="underline underline-offset-4 hover:text-secondary disabled:opacity-40 disabled:cursor-not-allowed" id="btn-commit-rescan" type="button">Rescan</button>
+          </div>
+        </div>
+
+        <div aria-live="polite" class="font-label-mono text-[10px] text-on-surface-variant mb-2" id="commit-scan-status">Ready.</div>
+
+        <div class="border border-outline-variant/60 overflow-x-auto">
+          <table class="w-full font-mono-data text-[11px]">
+            <thead>
+              <tr class="border-b border-outline-variant/60 font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">
+                <th class="text-left px-3 py-2">Repository</th>
+                <th class="text-left px-3 py-2">Branch</th>
+                <th class="text-right px-3 py-2">Changes</th>
+                <th class="text-left px-3 py-2 hidden md:table-cell">Remote</th>
+                <th class="text-left px-3 py-2">State</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-outline-variant/30" id="commit-preview-body">
+              <tr><td class="px-3 py-3 text-on-surface-variant" colspan="5">Scanning…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="hidden mt-3 border border-secondary/60 bg-surface-container-low p-3" id="commit-secret-warning">
+          <div class="flex items-start gap-2">
+            <span class="material-symbols-outlined text-[16px] text-secondary shrink-0">warning</span>
+            <div class="min-w-0">
+              <div class="font-label-mono text-[10px] uppercase tracking-wider text-secondary mb-1">LIKELY SENSITIVE FILES IN THIS RUN</div>
+              <div class="font-mono-data text-[11px] text-on-surface break-all" id="commit-secret-text"></div>
+              <div class="font-label-mono text-[9px] text-on-surface-variant mt-1">These files are not ignored by Git. Review them before confirming.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-3 mt-3 pt-3 border-t border-outline-variant/50">
+          <div class="font-label-mono text-[10px] text-on-surface-variant" id="commit-preview-summary">—</div>
+          <div class="flex items-center gap-2">
+            <button class="border border-outline-variant/70 px-3 py-1.5 font-label-mono text-[10px] uppercase hover:border-secondary hover:text-secondary transition-colors" id="btn-commit-close-preview" type="button">Close</button>
+            <button class="bg-primary text-surface hover:bg-secondary px-4 py-1.5 font-label-mono text-[10px] uppercase font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled id="btn-commit-run" type="button">Commit &amp; push</button>
+          </div>
+        </div>
+
+        <div class="mt-3 font-label-mono text-[9px] text-on-surface-variant leading-relaxed">
+          PUSHES USE YOUR MACHINE'S GIT CREDENTIALS / SSH · LOGBOOK'S GITHUB TOKEN IS NEVER USED FOR WRITES · FAILED PUSHES LEAVE THE LOCAL COMMIT IN PLACE
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ARCHIVAL TOAST NOTIFICATION -->
   <div class="fixed bottom-5 right-5 z-[110] bg-primary text-surface border border-secondary px-4 py-2.5 font-label-mono text-label-mono uppercase tracking-wider pointer-events-none opacity-0 translate-y-2 transition-all duration-200 flex items-center space-x-2" id="archival-toast">
     <span class="w-2 h-2 bg-secondary shrink-0"></span>
@@ -1452,7 +1552,8 @@
   var CACHE_KEY = "logbook:github:payload:v2";
   var CACHE_TTL_MS = 6 * 60 * 60 * 1000;
   var MAX_DEEP_REPOS = 100;
-  var CONCURRENCY = 6;
+  var CONCURRENCY = 28;
+  var CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
   var LANG_COLORS = {
     "PHP": "#7C8444", "Python": "#2E7D6B", "TypeScript": "#4A6A94",
@@ -1651,7 +1752,20 @@
     error: null,
     rate: null,
     patchCache: {},
-    treeCache: {}
+    treeCache: {},
+    commit: {
+      root: "",
+      folder: null,
+      folderLoading: false,
+      scan: null,
+      scanLoading: false,
+      running: false,
+      done: false,
+      results: [],
+      runMessage: "",
+      summary: null,
+      error: ""
+    }
   };
 
   // =========================================================================
@@ -1757,7 +1871,8 @@
       density: state.density,
       range: state.currentRange,
       savedViews: state.savedViews,
-      activeView: state.preferences.activeView || ""
+      activeView: state.preferences.activeView || "",
+      commitRoot: state.preferences.commitRoot || ""
     };
   }
 
@@ -2224,6 +2339,7 @@
 
     var probe = await probeAuthBridge();
     state.authProbe = probe;
+    updateCommitFeatureVisibility();
 
     if (probe && probe.authorized) {
       state.auth = probe;
@@ -4595,7 +4711,7 @@
     if (el) el.scrollIntoView({ behavior: "smooth" });
   }
 
-  var MODAL_IDS = ["cmd-palette-modal", "profile-modal", "shortcuts-modal", "session-modal", "glossary-modal"];
+  var MODAL_IDS = ["cmd-palette-modal", "profile-modal", "shortcuts-modal", "session-modal", "glossary-modal", "commit-modal"];
 
   function visibleModal() {
     for (var i = MODAL_IDS.length - 1; i >= 0; i--) {
@@ -4744,6 +4860,475 @@
     }
   }
 
+  // =========================================================================
+  // 9b. COMMIT NOW / LOCAL REPOSITORIES
+  // =========================================================================
+  function updateCommitFeatureVisibility() {
+    var btn = document.getElementById("btn-commit-now");
+    if (!btn) return;
+    var enabled = !!(state.authProbe && state.authProbe.features && state.authProbe.features.commitNow);
+    btn.classList.toggle("hidden", !enabled);
+    btn.classList.toggle("flex", enabled);
+  }
+
+  function commitErrorLabel(error) {
+    if (!error) return "Something went wrong.";
+    if (error.status === 401 || error.code === "unauthorized") return "Your session expired. Authorize GitHub again.";
+    if (error.code === "commit_disabled") return "Commit Now is disabled on this server.";
+    if (error.code === "commit_in_progress") return "A commit run is already in progress.";
+    if (error.code === "rate_limited") return "Too many requests. Wait a moment and try again.";
+    if (error.code === "not_found") return "That folder could not be found.";
+    if (error.code === "not_a_directory") return "That path is not a folder.";
+    if (error.code === "permission_denied") return "Logbook does not have permission to read that folder.";
+    return error.message || String(error);
+  }
+
+  function shortSkipLabel(reason) {
+    var labels = {
+      clean: "Up to date",
+      clean_no_upstream: "Clean · no upstream",
+      behind_remote: "Behind remote",
+      diverged: "Diverged",
+      detached_head: "Detached HEAD",
+      merge_in_progress: "Merge in progress",
+      rebase_in_progress: "Rebase in progress",
+      cherry_pick_in_progress: "Cherry-pick in progress",
+      revert_in_progress: "Revert in progress",
+      bisect_in_progress: "Bisect in progress",
+      merge_conflict: "Merge conflict",
+      submodule: "Submodule",
+      bare_repo: "Bare repo",
+      status_failed: "Status failed"
+    };
+    return labels[reason] || "Skipped";
+  }
+
+  function showCommitFolderView() {
+    var folder = document.getElementById("commit-folder-view");
+    var preview = document.getElementById("commit-preview-view");
+    var intro = document.getElementById("commit-intro");
+    if (folder) folder.classList.remove("hidden");
+    if (preview) preview.classList.add("hidden");
+    if (intro) intro.textContent = "Choose the folder that holds your projects. Logbook scans it on this machine, previews every change, and only commits after you confirm. Pushes use your existing git credentials, never the Logbook token.";
+  }
+
+  function showCommitPreviewView() {
+    var folder = document.getElementById("commit-folder-view");
+    var preview = document.getElementById("commit-preview-view");
+    var intro = document.getElementById("commit-intro");
+    if (folder) folder.classList.add("hidden");
+    if (preview) preview.classList.remove("hidden");
+    if (intro) intro.textContent = "Review the repositories below. Nothing is written until you press the confirm button.";
+  }
+
+  function openCommitModal() {
+    if (!(state.authProbe && state.authProbe.features && state.authProbe.features.commitNow)) {
+      showToast("COMMIT NOW IS DISABLED ON THIS SERVER");
+      return;
+    }
+    if (!usingServerAuth() || !hasServerSession()) {
+      showToast("AUTHORIZE GITHUB TO USE COMMIT NOW");
+      openModal("profile-modal");
+      return;
+    }
+    openModal("commit-modal");
+    if (state.commit.running) return;
+    state.commit.root = state.preferences.commitRoot || state.commit.root || "";
+    state.commit.error = "";
+    state.commit.results = [];
+    state.commit.summary = null;
+    state.commit.done = false;
+    state.commit.runMessage = "";
+    if (state.commit.root) {
+      showCommitPreviewView();
+      scanCommitRoot(state.commit.root);
+    } else {
+      showCommitFolderView();
+      loadCommitFolder("");
+    }
+  }
+
+  async function loadCommitFolder(dir) {
+    state.commit.folder = null;
+    state.commit.folderLoading = true;
+    state.commit.error = "";
+    renderCommitFolder();
+    try {
+      var suffix = dir ? "?path=" + encodeURIComponent(dir) : "";
+      var data = await apiJson("/commit/folders" + suffix);
+      state.commit.folder = data;
+      state.commit.folderLoading = false;
+      renderCommitFolder();
+    } catch (e) {
+      state.commit.folderLoading = false;
+      state.commit.error = commitErrorLabel(e);
+      renderCommitFolder();
+    }
+  }
+
+  function renderCommitFolder() {
+    var folder = state.commit.folder;
+    var pathInput = document.getElementById("commit-folder-path");
+    var list = document.getElementById("commit-folder-list");
+    var shortcuts = document.getElementById("commit-folder-shortcuts");
+    var hint = document.getElementById("commit-folder-hint");
+    var up = document.getElementById("btn-commit-folder-up");
+    var useBtn = document.getElementById("btn-commit-use-folder");
+
+    if (state.commit.folderLoading) {
+      if (list) list.innerHTML = '<div class="p-3 font-mono-data text-[11px] text-on-surface-variant">Reading folders…</div>';
+      if (shortcuts) shortcuts.innerHTML = "";
+      if (hint) hint.textContent = "Reading folders…";
+      if (useBtn) useBtn.disabled = true;
+      if (up) up.disabled = true;
+      return;
+    }
+    if (state.commit.error && !folder) {
+      if (list) list.innerHTML = '<div class="p-3 font-mono-data text-[11px] text-secondary">' + escapeHtml(state.commit.error) + '</div>';
+      if (hint) hint.textContent = "Enter another folder path, or use a shortcut.";
+      if (useBtn) useBtn.disabled = true;
+      if (up) up.disabled = true;
+      return;
+    }
+    if (!folder) return;
+
+    if (pathInput && document.activeElement !== pathInput) pathInput.value = folder.path;
+    if (up) up.disabled = !folder.parent;
+    if (useBtn) useBtn.disabled = false;
+
+    if (shortcuts) {
+      shortcuts.innerHTML = (folder.shortcuts || []).map(function (item) {
+        return '<button type="button" class="commit-shortcut border border-outline-variant/60 px-2 py-0.5 uppercase hover:border-primary hover:text-on-surface transition-colors" data-commit-path="' +
+          escapeHtml(item.path) + '" title="' + escapeHtml(item.path) + '">' + escapeHtml(item.label) + '</button>';
+      }).join("");
+      shortcuts.querySelectorAll(".commit-shortcut").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          playSound("tick");
+          loadCommitFolder(btn.getAttribute("data-commit-path"));
+        });
+      });
+    }
+
+    var html = (folder.entries || []).map(function (entry) {
+      var badge = entry.isRepo
+        ? '<span class="font-label-mono text-[8px] uppercase tracking-widest px-1 py-0.5 border border-secondary text-secondary shrink-0">git</span>'
+        : "";
+      return '<button class="commit-folder-entry w-full text-left px-3 py-2 flex items-center justify-between gap-3 hover:bg-surface-container transition-colors" data-commit-path="' +
+        escapeHtml(entry.path) + '" title="' + escapeHtml(entry.path) + '" type="button">' +
+        '<span class="flex items-center gap-2 min-w-0"><span class="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0">folder</span>' +
+        '<span class="font-mono-data text-[12px] text-on-surface truncate">' + escapeHtml(entry.name) + '</span></span>' + badge +
+        '</button>';
+    }).join("");
+    if (!html) html = '<div class="p-3 font-mono-data text-[11px] text-on-surface-variant">No subfolders here. You can still select this folder.</div>';
+    if (list) {
+      list.innerHTML = html;
+      list.querySelectorAll(".commit-folder-entry").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          playSound("tick");
+          loadCommitFolder(btn.getAttribute("data-commit-path"));
+        });
+      });
+    }
+
+    if (hint) {
+      var directRepos = (folder.entries || []).filter(function (entry) { return entry.isRepo; }).length + (folder.isRepo ? 1 : 0);
+      hint.textContent = folder.isRepo
+        ? "This folder is a Git repository. It will be scanned as one repository."
+        : (directRepos
+          ? directRepos + " Git repositor" + (directRepos === 1 ? "y" : "ies") + " directly here. Nested repositories are scanned too."
+          : "Select this folder; Logbook scans up to 3 levels for Git repositories.");
+    }
+  }
+
+  function chooseCommitRoot(root) {
+    if (!root) return;
+    state.commit.root = root;
+    state.preferences.commitRoot = root;
+    persistPreferences();
+    showToast("COMMIT ROOT SAVED");
+    showCommitPreviewView();
+    scanCommitRoot(root);
+  }
+
+  async function scanCommitRoot(root) {
+    state.commit.root = root;
+    state.commit.scanLoading = true;
+    state.commit.scan = null;
+    state.commit.error = "";
+    state.commit.done = false;
+    state.commit.results = [];
+    state.commit.summary = null;
+    state.commit.runMessage = "";
+    renderCommitPreview();
+    try {
+      var data = await apiJson("/commit/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ root: root })
+      });
+      state.commit.scan = data;
+      state.commit.scanLoading = false;
+      renderCommitPreview();
+      var actionable = (data.repos || []).filter(function (repo) { return repo.actionable; });
+      if (!data.repos || !data.repos.length) showToast("NO GIT REPOSITORIES FOUND");
+      else if (!actionable.length) showToast("ALL REPOSITORIES CLEAN");
+    } catch (e) {
+      state.commit.scanLoading = false;
+      state.commit.error = commitErrorLabel(e);
+      renderCommitPreview();
+    }
+  }
+
+  function commitPreviewState(repo, result) {
+    if (result) {
+      var tones = {
+        committed_pushed: ["COMMITTED + PUSHED", "text-[#2E7D6B]"],
+        pushed: ["PUSHED", "text-[#2E7D6B]"],
+        committed_no_remote: ["COMMITTED · NO REMOTE", "text-on-surface"],
+        skipped: ["SKIPPED", "text-on-surface-variant"],
+        failed: ["FAILED", "text-secondary"],
+        committed_push_failed: ["COMMITTED · PUSH FAILED", "text-secondary"],
+        push_failed: ["PUSH FAILED", "text-secondary"]
+      };
+      var tone = tones[result.status] || [String(result.status || "DONE").replace(/_/g, " ").toUpperCase(), "text-on-surface-variant"];
+      var detail = result.detail
+        ? '<div class="font-mono-data text-[9px] text-on-surface-variant mt-1 max-w-[22rem]">' + escapeHtml(result.detail) + '</div>'
+        : "";
+      var hash = result.commit
+        ? '<div class="font-label-mono text-[9px] text-on-surface-variant">' + escapeHtml(result.commit) + '</div>'
+        : "";
+      return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider ' + tone[1] + '">' + escapeHtml(tone[0]) + '</div>' + hash + detail };
+    }
+    if (state.commit.running) {
+      return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">Pending</div>' };
+    }
+    if (repo.actionable) {
+      var label = repo.changed ? "Ready · commit + push" : "Ready · push";
+      return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface">' + label + '</div>' };
+    }
+    return { html: '<div class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">' + escapeHtml(shortSkipLabel(repo.skipReason)) + '</div>' };
+  }
+
+  function renderCommitPreview() {
+    var rootLabel = document.getElementById("commit-root-label");
+    var status = document.getElementById("commit-scan-status");
+    var body = document.getElementById("commit-preview-body");
+    var summary = document.getElementById("commit-preview-summary");
+    var runBtn = document.getElementById("btn-commit-run");
+    var secretBox = document.getElementById("commit-secret-warning");
+    var secretText = document.getElementById("commit-secret-text");
+    var rescan = document.getElementById("btn-commit-rescan");
+    var changeFolder = document.getElementById("btn-commit-change-folder");
+
+    if (rootLabel) rootLabel.textContent = state.commit.root || "—";
+    if (rescan) rescan.disabled = state.commit.running || state.commit.scanLoading;
+    if (changeFolder) changeFolder.disabled = state.commit.running;
+
+    if (state.commit.scanLoading) {
+      if (status) status.textContent = "SCANNING FOR GIT REPOSITORIES…";
+      if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="5">Scanning ' + escapeHtml(state.commit.root) + '…</td></tr>';
+      if (summary) summary.textContent = "—";
+      if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Scanning…"; }
+      if (secretBox) secretBox.classList.add("hidden");
+      return;
+    }
+    if (state.commit.error && !state.commit.scan) {
+      if (status) status.textContent = "SCAN FAILED";
+      if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-secondary font-mono-data text-[11px]" colspan="5">' + escapeHtml(state.commit.error) + '</td></tr>';
+      if (summary) summary.textContent = "—";
+      if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Commit & push"; }
+      if (secretBox) secretBox.classList.add("hidden");
+      return;
+    }
+    if (!state.commit.scan) return;
+
+    var repos = state.commit.scan.repos || [];
+    var actionable = repos.filter(function (repo) { return repo.actionable; });
+    var results = {};
+    state.commit.results.forEach(function (result) {
+      results[String(result.path).toLowerCase()] = result;
+    });
+
+    var secrets = [];
+    actionable.forEach(function (repo) {
+      (repo.secrets || []).forEach(function (file) {
+        if (secrets.indexOf(file) === -1) secrets.push(file);
+      });
+    });
+    if (secretBox && secretText) {
+      if (secrets.length) {
+        secretBox.classList.remove("hidden");
+        var shownSecrets = secrets.slice(0, 8).join(" · ");
+        if (secrets.length > 8) shownSecrets += " · +" + (secrets.length - 8) + " MORE";
+        secretText.textContent = shownSecrets;
+      } else {
+        secretBox.classList.add("hidden");
+        secretText.textContent = "";
+      }
+    }
+
+    var rows = repos.map(function (repo) {
+      var result = results[String(repo.path).toLowerCase()];
+      var stateInfo = commitPreviewState(repo, result);
+      var secretIcon = (repo.secrets && repo.secrets.length)
+        ? '<span class="material-symbols-outlined text-[12px] text-secondary align-middle ml-1" title="Likely sensitive file: ' + escapeHtml(repo.secrets.join(", ")) + '">warning</span>'
+        : "";
+      var changeText = repo.changed ? String(repo.changeCount) : (repo.ahead ? "↑ " + repo.ahead : "—");
+      var remote = repo.remoteLabel || "none";
+      return '<tr class="' + (repo.actionable ? "" : "text-on-surface-variant") + '" data-commit-repo="' + escapeHtml(repo.path) + '">' +
+        '<td class="px-3 py-2 align-top"><div class="flex items-start gap-1 min-w-0"><span class="text-on-surface font-medium truncate" title="' + escapeHtml(repo.path) + '">' + escapeHtml(repo.name) + '</span>' + secretIcon + '</div></td>' +
+        '<td class="px-3 py-2 align-top">' + escapeHtml(repo.branch || "—") + '</td>' +
+        '<td class="px-3 py-2 align-top text-right tabular-nums">' + escapeHtml(changeText) + '</td>' +
+        '<td class="px-3 py-2 align-top hidden md:table-cell"><span class="block max-w-[18rem] truncate" title="' + escapeHtml(repo.remoteLabel || "") + '">' + escapeHtml(remote) + '</span></td>' +
+        '<td class="px-3 py-2 align-top">' + stateInfo.html + '</td>' +
+        '</tr>';
+    }).join("");
+    if (body) body.innerHTML = rows || '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="5">No Git repositories found under this folder.</td></tr>';
+
+    var commitCount = actionable.filter(function (repo) { return repo.changed; }).length;
+    var pushOnlyCount = actionable.filter(function (repo) { return !repo.changed; }).length;
+    var fileCount = actionable.reduce(function (sum, repo) { return sum + (repo.changeCount || 0); }, 0);
+
+    if (state.commit.running) {
+      var doneCount = state.commit.results.length;
+      if (status) status.textContent = "COMMITTING " + Math.min(doneCount + 1, actionable.length) + " / " + actionable.length + (state.commit.runMessage ? " · " + state.commit.runMessage : "");
+      if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Running…"; }
+    } else if (state.commit.done) {
+      if (state.commit.error) {
+        if (status) status.textContent = "RUN INTERRUPTED · " + state.commit.error;
+      } else {
+        var summaryData = state.commit.summary || { committed: 0, pushed: 0, skipped: 0, failed: 0 };
+        if (status) status.textContent = "FINISHED · " + summaryData.committed + " COMMITTED · " + summaryData.pushed + " PUSHED · " + summaryData.failed + " FAILED";
+      }
+      if (runBtn) { runBtn.disabled = false; runBtn.textContent = "Done"; }
+    } else {
+      if (status) {
+        status.textContent = state.commit.error
+          ? "COULD NOT START · " + state.commit.error
+          : "SCANNED " + repos.length + " REPOSITOR" + (repos.length === 1 ? "Y" : "IES") + (state.commit.scan.truncated ? " · SCAN TRUNCATED, CHOOSE A NARROWER FOLDER" : "");
+      }
+      if (runBtn) {
+        runBtn.disabled = actionable.length === 0;
+        runBtn.textContent = actionable.length ? "Commit & push " + actionable.length : "Nothing to commit";
+        if (actionable.length && pushOnlyCount && !commitCount) runBtn.textContent = "Push " + actionable.length;
+      }
+    }
+
+    if (summary) {
+      if (!actionable.length) {
+        summary.textContent = "ALL REPOSITORIES CLEAN · NOTHING TO COMMIT OR PUSH";
+      } else {
+        var bits = [actionable.length + " REPOSITOR" + (actionable.length === 1 ? "Y" : "IES")];
+        if (fileCount) bits.push(fileCount + " FILE" + (fileCount === 1 ? "" : "S"));
+        if (commitCount) bits.push(commitCount + " TO COMMIT");
+        if (pushOnlyCount) bits.push(pushOnlyCount + " PUSH ONLY");
+        if (secrets.length) bits.push(secrets.length + " SENSITIVE");
+        summary.textContent = bits.join(" · ");
+      }
+    }
+  }
+
+  async function readNdjson(res, onEvent) {
+    if (!res.body || typeof res.body.getReader !== "function") {
+      var text = await res.text();
+      text.split(/\r?\n/).forEach(function (line) {
+        line = line.trim();
+        if (!line) return;
+        try { onEvent(JSON.parse(line)); } catch (e) {}
+      });
+      return;
+    }
+    var reader = res.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = "";
+    while (true) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      var lines = buffer.split("\n");
+      buffer = lines.pop();
+      lines.forEach(function (line) {
+        line = line.trim();
+        if (!line) return;
+        try { onEvent(JSON.parse(line)); } catch (e) {}
+      });
+    }
+    buffer += decoder.decode();
+    var tail = buffer.trim();
+    if (tail) {
+      try { onEvent(JSON.parse(tail)); } catch (e) {}
+    }
+  }
+
+  async function runCommitNow() {
+    if (state.commit.running) return;
+    if (state.commit.done) { closeAllModals(); return; }
+    if (!state.commit.scan) return;
+    var actionable = (state.commit.scan.repos || []).filter(function (repo) { return repo.actionable; });
+    if (!actionable.length) return;
+
+    state.commit.running = true;
+    state.commit.done = false;
+    state.commit.results = [];
+    state.commit.summary = null;
+    state.commit.error = "";
+    state.commit.runMessage = "";
+    renderCommitPreview();
+    playSound("relay");
+
+    var res;
+    try {
+      res = await apiFetch("/commit/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          root: state.commit.root,
+          paths: actionable.map(function (repo) { return repo.path; })
+        })
+      });
+    } catch (e) {
+      state.commit.running = false;
+      state.commit.error = commitErrorLabel(e);
+      renderCommitPreview();
+      return;
+    }
+    if (!res.ok) {
+      var data = null;
+      try { data = await res.json(); } catch (e) {}
+      state.commit.running = false;
+      state.commit.error = (data && (data.message || data.error)) || ("Bridge " + res.status);
+      renderCommitPreview();
+      showToast("COMMIT RUN COULD NOT START");
+      return;
+    }
+
+    var streamError = "";
+    try {
+      await readNdjson(res, function (event) {
+        if (!event || !event.type) return;
+        if (event.type === "start") {
+          state.commit.runMessage = event.message || "";
+        } else if (event.type === "result" && event.result) {
+          state.commit.results.push(event.result);
+          renderCommitPreview();
+        } else if (event.type === "done") {
+          state.commit.summary = event.summary || null;
+        } else if (event.type === "error") {
+          streamError = event.detail || event.message || "The commit run failed.";
+        }
+      });
+    } catch (e) {
+      streamError = "The result stream was interrupted. The run may still be finishing; rescan in a moment.";
+    }
+
+    state.commit.running = false;
+    state.commit.done = true;
+    if (streamError) state.commit.error = streamError;
+    renderCommitPreview();
+    var failed = state.commit.results.filter(function (result) { return result.failed; }).length;
+    showToast(failed ? "COMMIT RUN FINISHED · " + failed + " FAILED" : "COMMIT RUN FINISHED");
+  }
+
   function commandItems() {
     var items = [
       { label: "Jump to 01 — NOW (latest push)", category: "SECTION", action: function () { scrollToSec("section-now"); } },
@@ -4760,6 +5345,9 @@
       { label: "Start Kiosk Presentation Mode (auto-rotating sections)", category: "PRESENTATION", action: function () { toggleKioskMode(); } },
       { label: "Toggle Portfolio Mode (curated public archive view)", category: "PRESENTATION", action: function () { togglePortfolioMode(); } }
     ];
+    if (state.authProbe && state.authProbe.features && state.authProbe.features.commitNow) {
+      items.push({ label: "Commit local changes to GitHub", category: "COMMIT", action: function () { openCommitModal(); } });
+    }
     REPOSITORIES.forEach(function (r) {
       items.push({
         label: "Inspect " + r.name + " (" + r.lang + " · " + r.desc.slice(0, 50) + ")",
@@ -5536,6 +6124,33 @@
       if (soundEnabled) playSound("click");
       showToast("AUDIO " + (soundEnabled ? "ON" : "MUTED"));
     });
+    document.getElementById("btn-commit-now").addEventListener("click", function () { openCommitModal(); });
+    document.getElementById("btn-close-commit").addEventListener("click", closeAllModals);
+    document.getElementById("btn-commit-folder-cancel").addEventListener("click", closeAllModals);
+    document.getElementById("btn-commit-close-preview").addEventListener("click", closeAllModals);
+    document.getElementById("btn-commit-folder-up").addEventListener("click", function () {
+      if (state.commit.folder && state.commit.folder.parent) loadCommitFolder(state.commit.folder.parent);
+    });
+    document.getElementById("btn-commit-folder-go").addEventListener("click", function () {
+      loadCommitFolder(document.getElementById("commit-folder-path").value);
+    });
+    document.getElementById("commit-folder-path").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        loadCommitFolder(this.value);
+      }
+    });
+    document.getElementById("btn-commit-use-folder").addEventListener("click", function () {
+      if (state.commit.folder && state.commit.folder.path) chooseCommitRoot(state.commit.folder.path);
+    });
+    document.getElementById("btn-commit-change-folder").addEventListener("click", function () {
+      showCommitFolderView();
+      loadCommitFolder(state.commit.root || "");
+    });
+    document.getElementById("btn-commit-rescan").addEventListener("click", function () {
+      if (state.commit.root) scanCommitRoot(state.commit.root);
+    });
+    document.getElementById("btn-commit-run").addEventListener("click", function () { runCommitNow(); });
     document.getElementById("btn-cmd-palette").addEventListener("click", function () { openModal("cmd-palette-modal"); });
     document.getElementById("btn-close-cmd").addEventListener("click", closeAllModals);
     document.getElementById("cmd-input").addEventListener("input", function () { renderCommandResults(this.value); });
@@ -5602,7 +6217,7 @@
     document.getElementById("btn-export-account").addEventListener("click", exportAccountData);
     document.getElementById("btn-delete-account").addEventListener("click", deleteAccountData);
 
-    ["cmd-palette-modal", "profile-modal", "shortcuts-modal", "session-modal", "glossary-modal"].forEach(function (id) {
+    ["cmd-palette-modal", "profile-modal", "shortcuts-modal", "session-modal", "glossary-modal", "commit-modal"].forEach(function (id) {
       var modal = document.getElementById(id);
       if (modal) modal.addEventListener("click", function (e) { if (e.target === this) closeAllModals(); });
     });

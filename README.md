@@ -1,4 +1,12 @@
-# Logbook
+# Logbook 📡📖
+
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.13-green.svg?logo=node.js)](https://nodejs.org/)
+[![Version](https://img.shields.io/badge/Version-4.14.0-blue.svg)](package.json)
+[![Architecture](https://img.shields.io/badge/Architecture-Zero--Build_Frontend-6C5CE7.svg)](index.html)
+[![Storage](https://img.shields.io/badge/Storage-SQLite_%2B_AES--256--GCM-003B57.svg?logo=sqlite)](data/)
+[![Realtime](https://img.shields.io/badge/Streaming-Server--Sent_Events-orange.svg)](server.js)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Maintainer](https://img.shields.io/badge/Maintainer-thebinayghimire-blueviolet.svg)](https://github.com/thebinayghimire)
 
 An interactive GitHub archival telemetry folio. The frontend is a single HTML file with no build step. The Node bridge provides a username-first GitHub OAuth flow, persistent encrypted sessions, and background snapshot sync while keeping GitHub tokens out of the browser.
 
@@ -15,7 +23,7 @@ The app does not offer an unauthenticated public-data bypass on the entry screen
 
 After authorization, the account dossier shows the authenticated profile, accessible/private/public repository counts, the private repository ledger, organizations, starred repositories, gists, followers, and following. The main ledger includes **all repositories the token can access** — owner, collaborator, and organization-member repositories, public and private.
 
-The bridge only issues read-only GitHub requests: REST `GET` calls plus a GraphQL query for the official contribution calendar. It never writes to GitHub.
+The bridge only issues read-only GitHub requests: REST `GET` calls plus a GraphQL query for the official contribution calendar. It never writes to GitHub with the Logbook token. The optional **Commit Now** feature is separate: it runs local `git commit` and `git push` against repositories on the bridge machine, using that machine's existing git credentials. It is disabled by default and cannot be enabled off a loopback listener.
 
 After authorization, the dashboard paints the encrypted snapshot immediately. If the snapshot is older than `SNAPSHOT_FRESH_MS` (default 60 seconds), an incremental scan starts in the background; a fresh snapshot skips the load-time scan. Sync progress streams over Server-Sent Events (`/api/events`). A visible tab also runs a silent conditional repository check every 60 seconds as a fallback, using ETags and a repository signature. Unchanged `304 Not Modified` responses do not consume the authenticated primary rate limit. A background scan runs only when the repository signature changes; background checks do not show spinners, banners, or toast notifications. Rate-limit responses trigger an automatic backoff.
 
@@ -84,7 +92,7 @@ Run the test suite with:
 npm test
 ```
 
-The tests use Node's built-in `node:test` runner and cover OAuth helpers, session isolation and revocation, snapshot ownership and deletion, and commit attribution.
+The tests use Node's built-in `node:test` runner and cover OAuth helpers, session isolation and revocation, snapshot ownership and deletion, commit attribution, and the local Commit Now engine.
 
 ### GitHub OAuth app (required)
 
@@ -95,6 +103,32 @@ The tests use Node's built-in `node:test` runner and cover OAuth helpers, sessio
 5. Restart `npm start`.
 
 The callback URL must match `GITHUB_CALLBACK_URL` exactly, and the hostname must match the one you open in the browser: OAuth state cookies are scoped to `localhost` or `127.0.0.1`, not both. On a public deployment use an HTTPS callback and set `ALLOW_LOCAL_AUTH=0`.
+
+## Commit Now (local only)
+
+Commit Now is an opt-in write path for this machine. It lets an authenticated Logbook session choose a projects folder, preview uncommitted work, and commit and push selected repositories without leaving the dashboard. It is off by default and is forced off unless the bridge listens on a loopback address:
+
+```dotenv
+ENABLE_COMMIT_NOW=1
+HOST=127.0.0.1
+```
+
+After restarting the bridge, sign in and click **Commit now** in the header. The button only appears when `/api/session` reports `features.commitNow: true`. If a projects root was saved before, the modal opens straight into a fresh scan. Otherwise it opens an in-app folder browser backed by the bridge process; the chosen root is stored per account as the `commitRoot` preference.
+
+The preview is read-only. One confirmation starts the run. For every actionable repository, Logbook:
+
+- scans up to three directory levels for `.git` entries, stops descending at a repository boundary, and skips dot-directories plus common dependency, build, cache, and system folders such as `node_modules`, `.venv`, `dist`, `build`, `target`, and `vendor`;
+- stages all changes, including untracked files, with `git add -A`; `.gitignore` is still honored;
+- flags likely secret files that are **not** ignored (for example `.env`, credentials JSON, private keys, and keystores) in the preview and inside each repository row;
+- commits with `chore: checkpoint YYYY-MM-DD HH:MM`, using the repository's configured `user.name` and `user.email`;
+- pushes the current branch, creating the upstream on the selected remote when one is missing, and pushes clean repositories that are already ahead;
+- reports per-repository progress over an NDJSON stream and records a `commit_now` audit event with repository names and result counts.
+
+It deliberately does **not** pull, rebase, merge, force-push, or resolve conflicts. A failed push leaves the local commit in place and reports the failure. Repositories are skipped when they are detached, bare, submodules, mid-merge/rebase/cherry-pick/revert/bisect, contain unmerged paths, or lack a git identity. There is no undo in the UI: use git's local reflog for a bad local commit, and revert or amend on the remote as you would normally.
+
+Commit Now uses the `git` CLI and the machine's existing credential helper or SSH agent, with terminal prompts and SSH batch prompts disabled. The Logbook OAuth token is never passed to git and is never used for writes. The selected root is the trust boundary: every requested repository path is resolved (including symlinks) and must stay inside it. A run is globally serialized; a second run receives `409 commit_in_progress`.
+
+The folder browser can read any directory the bridge process can read. Keep this feature on a private, loopback-only instance. `HOST=127.0.0.1` does **not** protect a loopback listener exposed through a reverse proxy: leave `ENABLE_COMMIT_NOW=0` on any proxied deployment. Anyone who can use the authenticated browser session can invoke a run, so sign out when you leave the machine.
 
 ## Configuration
 
@@ -109,6 +143,7 @@ Copy `.env.example` to `.env`; `.env` is ignored by git.
 | `PORT` | `8080` | Bridge listener port |
 | `HOST` | `127.0.0.1` | Bridge listener address |
 | `ALLOW_LOCAL_AUTH` | enabled only on loopback | Adopt the local `gh` token; set to `0` on shared or proxied hosts |
+| `ENABLE_COMMIT_NOW` | `0` | Enable the local Commit Now picker and commit/push endpoints; forced off unless `HOST` is loopback. Never enable on a shared, proxied, or public host |
 | `SESSION_TTL_HOURS` | `12` | Fixed lifetime of a persistent server session |
 | `SNAPSHOT_FRESH_MS` | `60000` | Skip a page-load rescan when the stored snapshot is newer than this; explicit refreshes and detected changes still scan |
 | `SNAPSHOT_ENCRYPTION_KEY` | generated under `data/` for development | 32 bytes (base64 or 64 hex chars) used to encrypt snapshots and session tokens; required in production |
@@ -126,6 +161,7 @@ Copy `.env.example` to `.env`; `.env` is ignored by git.
 - **Account binding.** The requested username is stored with the one-time OAuth state. The callback rejects authorization when the GitHub account that consented does not match that username. Authorizing a different account explicitly revokes the current bridge session first.
 - **OAuth state + PKCE.** The bridge stores a one-time `state` and PKCE verifier, sets an `HttpOnly` state cookie, verifies both on callback, and exchanges the code server-side. Return URLs are validated to prevent open redirects.
 - **CSRF and origin checks.** Every authenticated state-changing API call requires a session-derived `X-Logbook-CSRF` header, `X-Logbook-Auth: 1`, and a same-origin `Origin`/`Sec-Fetch-Site` when present. Cross-origin mutations are rejected. Local `gh` authorization, which has no session yet, uses the same origin/header guard.
+- **Opt-in local writes.** Commit Now is disabled unless `ENABLE_COMMIT_NOW=1` and `HOST` is a loopback address. Its endpoints require the normal authenticated session, CSRF token, and origin check. Repository paths are resolved and confined to the selected root, symlinks are followed before that check, and only one run may execute at a time. Git commands use `execFile` (no shell), run with `GIT_TERMINAL_PROMPT=0` and SSH batch mode, and use the machine's credentials rather than the Logbook OAuth token. The feature is not a GitHub write proxy and does not make the `/api/gh/*` route writable.
 - **No private payload persistence in the browser.** Private accounts and repository payloads are never written to `localStorage` or `sessionStorage`. Only public telemetry is cached in the browser, for up to six hours. Preferences for bridge sessions are stored server-side and partitioned by GitHub account; browser `localStorage` preferences are used only in public/static mode.
 - **Encrypted server snapshots.** Normalized private snapshots live in SQLite encrypted with AES-256-GCM and authenticated against the GitHub account ID. Responses use ETags so unchanged polls do not decrypt the snapshot.
 - **Security headers.** Responses set CSP with per-request script nonces, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, COOP/CORP, and `X-Robots-Tag`. HTTPS requests also receive HSTS. Static serving blocks `.env`, `.git`, `node_modules`, `server.js`, dot-segment traversal, and non-whitelisted file types.
@@ -162,13 +198,16 @@ Deletion removes Logbook's copy of the data but does **not** revoke the OAuth ap
 | `GET /api/events` | Server-Sent Events stream for sync progress |
 | `GET /api/snapshot` | Normalized snapshot; supports `commit_limit` and `cursor` |
 | `POST /api/sync`, `GET /api/sync`, `DELETE /api/sync` | Queue, inspect, or cancel an account scan |
+| `GET /api/commit/folders?path=` | List subfolders for the Commit Now picker (local commit mode only) |
+| `POST /api/commit/scan` | Scan a selected root and return a read-only repository preview |
+| `POST /api/commit/run` | Commit and push selected repositories; streams NDJSON progress |
 | `GET /api/gh/*` | Read-only GitHub REST proxy |
 | `POST /api/auth/local` | Adopt a local `gh` token when enabled |
 | `POST /api/logout` | Revoke the current session |
 | `GET /auth/github`, `GET /auth/github/callback` | OAuth start and callback |
 | `GET /auth/logout`, `GET /logout` | Cookie-based session logout |
 
-Authenticated mutating routes require the CSRF and origin headers described above. Health probes are intentionally unauthenticated.
+Authenticated mutating routes require the CSRF and origin headers described above. Health probes are intentionally unauthenticated. The three `/api/commit/*` routes return `403 commit_disabled` when local commit mode is off, and `POST /api/commit/run` returns `application/x-ndjson` events with `start`, `result`, `done`, and `error` types.
 
 ## Deployment
 
@@ -184,7 +223,7 @@ For production:
 
 1. Set `NODE_ENV=production` and provide a stable `SNAPSHOT_ENCRYPTION_KEY`.
 2. Mount `LOGBOOK_DATA_DIR` on a persistent volume and back up `logbook.sqlite` (plus its WAL files) with the service stopped or using SQLite's backup API.
-3. Set `ALLOW_LOCAL_AUTH=0` and use an HTTPS callback.
+3. Set `ALLOW_LOCAL_AUTH=0`, leave `ENABLE_COMMIT_NOW=0`, and use an HTTPS callback.
 4. Set `TRUST_PROXY=1` only when every request arrives through a trusted reverse proxy that overwrites `X-Forwarded-For`; otherwise clients can spoof rate-limit identities.
 5. Probe `/healthz` for liveness and `/readyz` for readiness.
 6. Send `SIGTERM` for graceful shutdown; the listener, SSE clients, and SQLite handles close cleanly.
@@ -193,7 +232,7 @@ The bridge is intentionally single-process. SQLite in WAL mode supports the web 
 
 Changing `SNAPSHOT_ENCRYPTION_KEY` makes existing sessions and snapshots unreadable. There is no in-place re-encryption tool: stop the service, remove the SQLite files (or restore a backup encrypted with the old key), and let accounts re-authorize and re-scan.
 
-**Reverse-proxy warning:** local `gh` authorization adopts the server owner's token. It is enabled automatically only when `HOST` is a loopback address, which is convenient for local development but dangerous if you expose that loopback listener through a public reverse proxy. Set `ALLOW_LOCAL_AUTH=0` on any proxied or shared host; the example `.env` starts with it disabled.
+**Reverse-proxy warning:** local `gh` authorization adopts the server owner's token, and Commit Now can commit and push repositories on the host. Both are gated by a loopback `HOST`, which is convenient for local development but dangerous if you expose that loopback listener through a public reverse proxy. Set `ALLOW_LOCAL_AUTH=0` and keep `ENABLE_COMMIT_NOW=0` on any proxied or shared host; the example `.env` starts with both disabled.
 
 The real OAuth token exchange requires a registered OAuth app; it cannot be completed from GitHub Pages or from a static file server.
 
@@ -210,6 +249,9 @@ Bridge guards:
 - **20 authorization attempts/minute per IP**.
 - **20 sync requests/minute per account**.
 - **10 exports/minute per account**.
+- **120 Commit Now folder listings/minute per account**.
+- **20 Commit Now scans/minute per account**.
+- **6 Commit Now runs/minute per account**, with one run in flight globally.
 
 A cold authenticated load costs roughly `10 + 2 × repositories scanned` requests: profile, repository pages, verified emails, two calls per deep repository (commits + languages), newest-commit detail, three search counts, account extras, and up to three GraphQL calendar years. Incremental scans cost one repository-list call plus two calls only for repositories whose `pushed_at`, `size`, default branch, or archive state changed.
 
@@ -226,7 +268,8 @@ A cold authenticated load costs roughly `10 + 2 × repositories scanned` request
 - Sign-out destroys the server session and returns to the gate.
 - An invalid token is rejected with `401` and is not stored.
 - OAuth redirect generation, state cookie, PKCE challenge, callback routing, and error handling were exercised with placeholder credentials. A real code exchange requires a registered OAuth app.
-- All **37** automated tests pass under Node's `node:test` runner.
+- All **49** automated tests pass under Node's `node:test` runner, including commit-engine scanning, secret detection, path confinement, and commit/push behavior against temporary repositories.
+- Commit Now was exercised end-to-end through the bridge and dashboard with temporary repositories and a local bare remote: folder browsing, preview, NDJSON progress, checkpoint commit, push-only repo, secret warning, CSRF rejection, and root-confinement rejection.
 
 ## Features
 
@@ -236,6 +279,7 @@ A cold authenticated load costs roughly `10 + 2 × repositories scanned` request
 - Session manager with device metadata, per-session revocation, and “sign out other sessions”
 - Account data export and explicit account deletion
 - Live sync via SSE with a 60-second conditional polling fallback
+- Opt-in local **Commit Now**: folder picker, repository preview, checkpoint commit, and push using the machine's git credentials
 - Metric glossary covering definitions, attribution, scope, and limits
 - Command palette (`⌘K` / `Ctrl+K`) over sections, repositories, and actions
 - Keyboard navigation: `J`/`K` rows, `Enter` inspect, `1`–`5` timeframe, `T` theme, `/` search, `Esc` clear

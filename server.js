@@ -22,6 +22,7 @@ const { execFile } = require("child_process");
 const { SnapshotStore } = require("./snapshot-store");
 const { SessionStore } = require("./session-store");
 const { SyncEngine } = require("./sync-engine");
+const commitEngine = require("./commit-engine");
 const {
   digest,
   randomToken,
@@ -68,6 +69,10 @@ const DATA_DIR = path.resolve(process.env.LOGBOOK_DATA_DIR || path.join(ROOT, "d
 const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_PROXY_BYTES = 12 * 1024 * 1024;
 const PRODUCTION = process.env.NODE_ENV === "production";
+// Commit Now runs local git commands. It is deliberately opt-in and can only
+// be enabled on a loopback listener, even if the flag is set elsewhere.
+const COMMIT_NOW_ENABLED = process.env.ENABLE_COMMIT_NOW === "1" && IS_LOOPBACK;
+const COMMIT_NOW_REQUESTED = process.env.ENABLE_COMMIT_NOW === "1";
 
 const snapshotStore = new SnapshotStore({
   dataDir: DATA_DIR,
@@ -88,11 +93,22 @@ const apiLimiter = new RateLimiter({ windowMs: 60_000, max: 300 });
 const authLimiter = new RateLimiter({ windowMs: 60_000, max: 20 });
 const syncLimiter = new RateLimiter({ windowMs: 60_000, max: 20 });
 const exportLimiter = new RateLimiter({ windowMs: 60_000, max: 10 });
+const commitBrowseLimiter = new RateLimiter({ windowMs: 60_000, max: 120 });
+const commitScanLimiter = new RateLimiter({ windowMs: 60_000, max: 20 });
+const commitRunLimiter = new RateLimiter({ windowMs: 60_000, max: 6 });
 
 /** @type {Map<string, {verifier:string, expectedLogin:string, returnTo:string, createdAt:number}>} */
 const pendingOAuth = new Map();
 const localGh = { available: false, login: null, scopes: null, checkedAt: 0 };
 const sseClients = new Map(); // accountId -> Set<{res, close}>
+let commitRunLock = null; // { accountId, startedAt, count }
+
+process.on("uncaughtException", (err) => {
+  console.error("[logbook] uncaught exception:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[logbook] unhandled rejection:", reason);
+});
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -138,6 +154,7 @@ refreshLocalGh().finally(() => {
     console.log(`  Sessions         SQLite · ${Math.round(SESSION_TTL_MS / 3600000)}h TTL`);
     console.log(`  Snapshots        AES-256-GCM · ${DATA_DIR}`);
     console.log(`  CSP              ${CSP_ENABLED ? "enabled (nonce scripts)" : "disabled"}`);
+    console.log(`  Commit now       ${COMMIT_NOW_ENABLED ? "enabled (local only)" : "disabled"}`);
     console.log("  ─────────────────────────────────────────────");
     if (PRODUCTION && !process.env.SNAPSHOT_ENCRYPTION_KEY) {
       console.warn("  [warn] NODE_ENV=production requires SNAPSHOT_ENCRYPTION_KEY; generated keys are for development only.");
@@ -147,6 +164,12 @@ refreshLocalGh().finally(() => {
     }
     if (PRODUCTION && ALLOW_LOCAL_AUTH) {
       console.warn("  [warn] ALLOW_LOCAL_AUTH is enabled in production. Set ALLOW_LOCAL_AUTH=0.");
+    }
+    if (COMMIT_NOW_REQUESTED && !IS_LOOPBACK) {
+      console.warn("  [warn] ENABLE_COMMIT_NOW requires a loopback HOST; local commit mode is disabled.");
+    }
+    if (COMMIT_NOW_ENABLED) {
+      console.warn("  [warn] Commit Now can commit and push any Git repository the bridge process can read. Keep HOST on loopback.");
     }
     console.log("");
   });
@@ -158,6 +181,9 @@ refreshLocalGh().finally(() => {
     authLimiter.prune(now);
     syncLimiter.prune(now);
     exportLimiter.prune(now);
+    commitBrowseLimiter.prune(now);
+    commitScanLimiter.prune(now);
+    commitRunLimiter.prune(now);
     for (const [state, p] of pendingOAuth) {
       if (now - p.createdAt > 10 * 60 * 1000) pendingOAuth.delete(state);
     }
@@ -244,6 +270,18 @@ async function handle(req, res) {
     return putPreferences(req, res);
   }
 
+  if (pathname === "/api/commit/folders" && req.method === "GET") {
+    return listCommitFolders(req, res, url);
+  }
+
+  if (pathname === "/api/commit/scan" && req.method === "POST") {
+    return scanCommitRepos(req, res);
+  }
+
+  if (pathname === "/api/commit/run" && req.method === "POST") {
+    return runCommitNow(req, res);
+  }
+
   if (pathname === "/api/export" && req.method === "GET") {
     return exportAccount(req, res);
   }
@@ -327,11 +365,13 @@ function publicSessionState(req) {
       lastUsed: session.lastUsed,
       expiresAt: session.expiresAt,
       sessionId: session.publicId,
+      features: { commitNow: COMMIT_NOW_ENABLED },
       csrfToken: sessionStore.csrfFor(session.sid)
     };
   }
   return {
     authorized: false,
+    features: { commitNow: COMMIT_NOW_ENABLED },
     oauthConfigured: OAUTH_CONFIGURED,
     oauthScopes: OAUTH_CONFIGURED ? OAUTH_SCOPE : null,
     permissions: OAUTH_CONFIGURED ? explainScopes(OAUTH_SCOPE) : [],
@@ -461,6 +501,200 @@ async function putPreferences(req, res) {
     return sendJson(res, 200, { ok: true, updatedAt: saved.updatedAt });
   } catch (error) {
     return sendJson(res, 413, { error: "preferences_too_large" });
+  }
+}
+
+function commitFeatureGuard(req, res, options = {}) {
+  if (!COMMIT_NOW_ENABLED) {
+    sendJson(res, 403, {
+      error: "commit_disabled",
+      message: "Local commit mode is disabled. Set ENABLE_COMMIT_NOW=1 and keep HOST on a loopback address."
+    });
+    return null;
+  }
+  return requireApi(req, res, options);
+}
+
+function commitRateGuard(req, res, limiter, session) {
+  const verdict = limiter.check("commit:" + session.profile.id);
+  applyRateHeaders(res, verdict);
+  if (!verdict.allowed) {
+    res.setHeader("Retry-After", String(verdict.retryAfter));
+    sendJson(res, 429, {
+      error: "rate_limited",
+      message: "Too many commit requests. Wait a moment and try again."
+    });
+    return false;
+  }
+  return true;
+}
+
+function commitErrorMessage(error) {
+  const messages = {
+    invalid_path: "That folder path is not valid.",
+    not_found: "That folder could not be found.",
+    not_a_directory: "That path is not a folder.",
+    permission_denied: "Logbook does not have permission to read that folder."
+  };
+  return messages[error] || "That folder could not be read.";
+}
+
+async function listCommitFolders(req, res, url) {
+  const session = commitFeatureGuard(req, res);
+  if (!session) return;
+  if (!commitRateGuard(req, res, commitBrowseLimiter, session)) return;
+  const requested = url.searchParams.get("path") || "";
+  const result = await commitEngine.listDirectories(requested);
+  if (!result.ok) {
+    return sendJson(res, result.error === "not_found" ? 404 : 400, {
+      error: result.error,
+      message: commitErrorMessage(result.error)
+    });
+  }
+  return sendJson(res, 200, result);
+}
+
+async function scanCommitRepos(req, res) {
+  const session = commitFeatureGuard(req, res, { csrf: true });
+  if (!session) return;
+  if (!commitRateGuard(req, res, commitScanLimiter, session)) return;
+  let body;
+  try {
+    body = await readJsonBody(req, res);
+  } catch (error) {
+    return sendJson(res, error.status || 400, { error: error.code || "bad_request" });
+  }
+  const root = body && body.root;
+  if (typeof root !== "string" || !root.trim()) {
+    return sendJson(res, 400, { error: "invalid_root", message: "Choose a projects folder first." });
+  }
+  const result = await commitEngine.scanProjects(root);
+  if (!result.ok) {
+    return sendJson(res, result.error === "not_found" ? 404 : 400, {
+      error: result.error,
+      message: commitErrorMessage(result.error)
+    });
+  }
+  return sendJson(res, 200, result);
+}
+
+async function runCommitNow(req, res) {
+  const session = commitFeatureGuard(req, res, { csrf: true });
+  if (!session) return;
+  if (!commitRateGuard(req, res, commitRunLimiter, session)) return;
+
+  let body;
+  try {
+    body = await readJsonBody(req, res);
+  } catch (error) {
+    return sendJson(res, error.status || 400, { error: error.code || "bad_request" });
+  }
+  const root = body && body.root;
+  const paths = body && Array.isArray(body.paths) ? body.paths : [];
+  if (typeof root !== "string" || !root.trim() || !paths.length) {
+    return sendJson(res, 400, { error: "invalid_repos", message: "No repositories were selected for this run." });
+  }
+  if (commitRunLock) {
+    return sendJson(res, 409, {
+      error: "commit_in_progress",
+      message: "A commit run is already in progress. Wait for it to finish."
+    });
+  }
+
+  const rootCheck = await commitEngine.resolveDirectory(root);
+  if (!rootCheck.ok) {
+    return sendJson(res, rootCheck.error === "not_found" ? 404 : 400, {
+      error: rootCheck.error,
+      message: commitErrorMessage(rootCheck.error)
+    });
+  }
+
+  const selected = [];
+  for (const value of paths.slice(0, 200)) {
+    if (typeof value !== "string" || !path.isAbsolute(value)) continue;
+    let resolved;
+    try {
+      // Resolve symlinks before the containment check so a link inside the
+      // selected root cannot point the run at a repository somewhere else.
+      resolved = await fs.promises.realpath(path.resolve(value));
+    } catch (error) {
+      continue;
+    }
+    if (!commitEngine.isPathInside(rootCheck.path, resolved)) continue;
+    if (!fs.existsSync(path.join(resolved, ".git"))) continue;
+    if (selected.some((existing) => commitEngine.samePath(existing, resolved))) continue;
+    selected.push(resolved);
+  }
+  if (!selected.length) {
+    return sendJson(res, 400, {
+      error: "no_valid_repos",
+      message: "None of the selected folders are Git repositories under that root."
+    });
+  }
+
+  // Re-check and set the lock without an await in between so two concurrent
+  // requests cannot both start a run.
+  if (commitRunLock) {
+    return sendJson(res, 409, {
+      error: "commit_in_progress",
+      message: "A commit run is already in progress. Wait for it to finish."
+    });
+  }
+  const message = commitEngine.defaultCommitMessage();
+  commitRunLock = { accountId: session.profile.id, startedAt: Date.now(), count: selected.length };
+
+  try {
+    res.writeHead(200, {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no"
+    });
+  } catch (error) {
+    commitRunLock = null;
+    throw error;
+  }
+
+  let clientGone = false;
+  res.on("close", () => { clientGone = true; });
+  const send = (payload) => {
+    if (clientGone || res.writableEnded) return;
+    try {
+      res.write(JSON.stringify(payload) + "\n");
+    } catch (error) {
+      clientGone = true;
+    }
+  };
+
+  send({ type: "start", total: selected.length, message, startedAt: Date.now() });
+  try {
+    const results = await commitEngine.runCommits(selected, {
+      message,
+      onResult: (result) => send({ type: "result", result })
+    });
+    const summary = commitEngine.summarize(results);
+    send({ type: "done", summary, finishedAt: Date.now() });
+    audit("commit_now", session, {
+      req,
+      detail: JSON.stringify({
+        root: rootCheck.path,
+        total: summary.total,
+        committed: summary.committed,
+        pushed: summary.pushed,
+        skipped: summary.skipped,
+        failed: summary.failed,
+        repositories: results.map((item) => item.name)
+      })
+    });
+  } catch (error) {
+    console.error("[logbook] commit run failed:", error && error.message ? error.message : error);
+    send({
+      type: "error",
+      message: "The commit run failed unexpectedly.",
+      detail: commitEngine.sanitizeGitOutput(error && error.message ? error.message : error)
+    });
+  } finally {
+    commitRunLock = null;
+    if (!res.writableEnded) res.end();
   }
 }
 
@@ -785,7 +1019,7 @@ async function finishOAuth(req, res, url) {
   const state = url.searchParams.get("state") || "";
   const code = url.searchParams.get("code") || "";
   const oauthError = url.searchParams.get("error") || "";
-  const cookieState = parseCookies(req)[STATE_COOKIE] || "";
+  const cookieState = parseCookies(req.headers.cookie)[STATE_COOKIE] || "";
   const pending = pendingOAuth.get(state);
   const returnTo = sanitizeReturnTo(pending ? pending.returnTo : "/");
 
