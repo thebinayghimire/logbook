@@ -370,7 +370,12 @@ function remoteLabel(url) {
       raw.startsWith("./") || raw.startsWith("../") || /^file:\/\//i.test(raw)) {
     let localPath = raw.replace(/^file:\/\//i, "").replace(/[\\/]+$/, "");
     try { localPath = decodeURIComponent(localPath); } catch (error) {}
-    const localName = path.basename(localPath) || "repository";
+    // A local remote may use Windows or POSIX separators regardless of the
+    // host running the bridge, so do not rely on the host platform's basename.
+    const localParts = localPath.split(/[\\/]+/).filter(Boolean);
+    const localName = localParts.length === 1 && /^[a-zA-Z]:$/.test(localParts[0])
+      ? "repository"
+      : localParts[localParts.length - 1] || "repository";
     const localLabel = "local · " + localName;
     return localLabel.length > 90 ? localLabel.slice(0, 87) + "..." : localLabel;
   }

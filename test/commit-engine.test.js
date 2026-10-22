@@ -391,11 +391,48 @@ test("normalizeUserPath expands tilde correctly", () => {
 });
 
 test("remoteLabel shortens local remotes and keeps hosted labels", () => {
-  assert.equal(engine.remoteLabel("C:\\Projects\\foo.git"), "local · foo.git");
-  assert.equal(engine.remoteLabel("file:///C:/Projects/foo.git"), "local · foo.git");
-  assert.equal(engine.remoteLabel("/home/me/foo.git"), "local · foo.git");
-  assert.equal(engine.remoteLabel("git@github.com:owner/repo.git"), "github.com/owner/repo");
-  assert.equal(engine.remoteLabel("https://github.com/owner/repo.git"), "github.com/owner/repo");
+  const cases = [
+    ["C:\\Projects\\foo.git", "local · foo.git"],
+    ["C:/Projects/foo.git", "local · foo.git"],
+    ["\\\\server\\share\\foo.git", "local · foo.git"],
+    ["//server/share/foo.git", "local · foo.git"],
+    ["/home/me/foo.git", "local · foo.git"],
+    ["./foo.git", "local · foo.git"],
+    ["../workspace/foo.git", "local · foo.git"],
+    ["/home/me/foo.git/", "local · foo.git"],
+    ["C:\\Projects\\foo.git\\\\", "local · foo.git"],
+    ["file:///C:/Projects/foo.git", "local · foo.git"],
+    ["file:///home/me/foo.git", "local · foo.git"],
+    ["file:///C:/Projects/foo.git/", "local · foo.git"],
+    ["file:///C:/My%20Projects/foo.git", "local · foo.git"],
+    ["file:///C:/bad%ZZ/foo.git", "local · foo.git"],
+    ["git@github.com:owner/repo.git", "github.com/owner/repo"],
+    ["ssh://git@github.com/owner/repo.git", "github.com/owner/repo"],
+    ["https://github.com/owner/repo.git", "github.com/owner/repo"],
+    ["https://www.github.com/owner/repo.git", "github.com/owner/repo"]
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(engine.remoteLabel(input), expected, input);
+  }
+});
+
+test("remoteLabel falls back to repository for root-only local paths", () => {
+  assert.equal(engine.remoteLabel("/"), "local · repository");
+  assert.equal(engine.remoteLabel("C:\\"), "local · repository");
+  assert.equal(engine.remoteLabel("file:///"), "local · repository");
+});
+
+test("remoteLabel truncates long local and hosted labels", () => {
+  const longName = "a".repeat(100) + ".git";
+  const local = engine.remoteLabel("C:\\Projects\\" + longName);
+  assert.equal(local.length, 90);
+  assert.ok(local.startsWith("local · a"));
+  assert.ok(local.endsWith("..."));
+
+  const hosted = engine.remoteLabel("https://github.com/owner/" + longName);
+  assert.equal(hosted.length, 90);
+  assert.ok(hosted.startsWith("github.com/owner/a"));
+  assert.ok(hosted.endsWith("..."));
 });
 
 test("defaultCommitMessage uses the checkpoint format", () => {

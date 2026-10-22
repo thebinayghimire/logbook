@@ -450,23 +450,13 @@ async function suggestCommitMessages(repoPaths, options = {}) {
     try {
       const result = await provider(prompt, options);
       const suggestions = completeSuggestions(result.content, fallback);
-      
-      if (suggestions.length === 3) {
-        const res = Object.assign({}, result, { suggestions });
-        suggestionCache.set(cacheKey, { at: Date.now(), result: res });
-        return res;
-      }
-
+      if (suggestions.length === 3) return Object.assign({}, result, { suggestions });
     } catch (error) {
       // Provider discovery is best effort. The deterministic fallback below is
       // part of the product contract, not an error state.
     }
   }
-  
-  const res = { provider: "heuristic", model: null, suggestions: fallback };
-  suggestionCache.set(cacheKey, { at: Date.now(), result: res });
-  return res;
-
+  return { provider: "heuristic", model: null, suggestions: fallback };
 }
 
 async function getLocalAiStatus(options = {}) {
