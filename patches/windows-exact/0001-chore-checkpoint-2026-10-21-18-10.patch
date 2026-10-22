@@ -1,0 +1,2442 @@
+From c1e2541e6e8a0e22806e6c01eef301d07a7ef992 Mon Sep 17 00:00:00 2001
+From: Binay Ghimire <binayire@gmail.com>
+Date: Wed, 21 Oct 2026 18:10:55 +0545
+Subject: [PATCH 1/3] chore: checkpoint 2026-10-21 18:10
+
+---
+ .env.example              |  11 +
+ README.md                 |  14 +
+ commit-ai-engine.js       | 506 ++++++++++++++++++++++++++
+ commit-engine-original.js | 725 ++++++++++++++++++++++++++++++++++++++
+ commit-engine.js          |  23 ++
+ index.html                | 593 ++++++++++++++++++++++++++++++-
+ server.js                 | 132 +++++++
+ test/commit-ai.test.js    | 153 ++++++++
+ 8 files changed, 2151 insertions(+), 6 deletions(-)
+ create mode 100644 commit-ai-engine.js
+ create mode 100644 commit-engine-original.js
+ create mode 100644 test/commit-ai.test.js
+
+diff --git a/.env.example b/.env.example
+index 6a6bb9a..c9e7207 100644
+--- a/.env.example
++++ b/.env.example
+@@ -42,6 +42,17 @@ ALLOW_LOCAL_AUTH=0
+ # HOST is a loopback address. Do not enable it on a shared or proxied host.
+ ENABLE_COMMIT_NOW=0
+ 
++# Semantic commit suggestions try Ollama (127.0.0.1:11434), then LM Studio
++# (127.0.0.1:1234), and otherwise use the built-in offline rule engine.
++# Cloud AI is disabled by default. Both values below must be set to opt in;
++# sanitized, size-bounded diffs may then be sent to the configured Gemini model.
++ALLOW_CLOUD_AI=0
++OMNIROUTE_BASE_URL=http://127.0.0.1:20128/v1
++OMNIROUTE_API_KEY=
++OMNIROUTE_MODEL=auto/best-coding-fast
++GEMINI_API_KEY=
++GEMINI_MODEL=gemini-2.5-flash
++
+ # Fixed lifetime of a persistent server session, in hours.
+ SESSION_TTL_HOURS=12
+ 
+diff --git a/README.md b/README.md
+index 520c7f1..fa13c31 100644
+--- a/README.md
++++ b/README.md
+@@ -133,6 +133,14 @@ Commit Now uses the `git` CLI and the machine's existing credential helper or SS
+ 
+ The folder browser can read any directory the bridge process can read. Keep this feature on a private, loopback-only instance. `HOST=127.0.0.1` does **not** protect a loopback listener exposed through a reverse proxy: leave `ENABLE_COMMIT_NOW=0` on any proxied deployment. Anyone who can use the authenticated browser session can invoke a run, so sign out when you leave the machine.
+ 
++### Semantic commit suggestions
++
++The Commit Message row includes **AI Suggest** after a repository scan. It collects staged and working-tree diffs plus bounded excerpts from safe untracked source files, removes sensitive-file sections and token-shaped values, caps the combined diff payload at 12 KB, and requests exactly three Conventional Commit options. Press `1`, `2`, or `3` while the options are visible to choose one.
++
++The provider order is Ollama on `127.0.0.1:11434`, LM Studio on `127.0.0.1:1234`, an explicitly enabled OmniRoute gateway, an explicitly enabled Gemini fallback, then the built-in rule engine. No model is required, and the rule engine always returns three suggestions when configured providers are unavailable. Code does not leave the machine while cloud AI remains disabled.
++
++Cloud routing is deliberately opt-in. With `ALLOW_CLOUD_AI=1`, OmniRoute is used when `OMNIROUTE_API_KEY` is configured; Gemini remains an optional later fallback when `GEMINI_API_KEY` is configured. Only the scrubbed, bounded payload is sent. Leave `ALLOW_CLOUD_AI=0` for the zero-cloud guarantee.
++
+ ## Configuration
+ 
+ Copy `.env.example` to `.env`; `.env` is ignored by git.
+@@ -147,6 +155,12 @@ Copy `.env.example` to `.env`; `.env` is ignored by git.
+ | `HOST` | `127.0.0.1` | Bridge listener address |
+ | `ALLOW_LOCAL_AUTH` | enabled only on loopback | Adopt the local `gh` token; set to `0` on shared or proxied hosts |
+ | `ENABLE_COMMIT_NOW` | `0` | Enable the local Commit Now picker and commit/push endpoints; forced off unless `HOST` is loopback. Never enable on a shared, proxied, or public host |
++| `ALLOW_CLOUD_AI` | `0` | Permit configured OmniRoute or Gemini providers after local providers fail |
++| `OMNIROUTE_BASE_URL` | `http://127.0.0.1:20128/v1` | Local OmniRoute OpenAI-compatible gateway |
++| `OMNIROUTE_API_KEY` | â€” | OmniRoute gateway key; server-side only and ignored unless `ALLOW_CLOUD_AI=1` |
++| `OMNIROUTE_MODEL` | `auto/best-coding-fast` | OmniRoute model or routing alias used for code-specific commit suggestions |
++| `GEMINI_API_KEY` | â€” | Optional server-side Gemini key; ignored unless `ALLOW_CLOUD_AI=1` |
++| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model used by the explicitly enabled cloud fallback |
+ | `SESSION_TTL_HOURS` | `12` | Fixed lifetime of a persistent server session |
+ | `SNAPSHOT_FRESH_MS` | `60000` | Skip a page-load rescan when the stored snapshot is newer than this; explicit refreshes and detected changes still scan |
+ | `SNAPSHOT_ENCRYPTION_KEY` | generated under `data/` for development | 32 bytes (base64 or 64 hex chars) used to encrypt snapshots and session tokens; required in production |
+diff --git a/commit-ai-engine.js b/commit-ai-engine.js
+new file mode 100644
+index 0000000..7c7ef6c
+--- /dev/null
++++ b/commit-ai-engine.js
+@@ -0,0 +1,506 @@
++"use strict";
++
++/**
++ * Semantic Conventional Commit suggestion engine.
++ *
++ * Diffs are collected and scrubbed locally. Cloud-backed OmniRoute or Gemini
++ * calls are unreachable unless the operator explicitly enables cloud AI and
++ * configures the corresponding server-side key.
++ */
++
++const path = require("path");
++const fs = require("fs");
++const { execFile } = require("child_process");
++
++const MAX_DIFF_BYTES = 12 * 1024;
++const PROVIDER_TIMEOUT_MS = 8_000;
++const CONVENTIONAL_COMMIT_RE = /^(feat|fix|refactor|docs|chore|test|perf|style)(\([a-z0-9][a-z0-9._/-]*\))?: [^\r\n]+$/;
++const ALLOWED_TYPES = new Set(["feat", "fix", "refactor", "docs", "chore", "test", "perf", "style"]);
++const SECRET_FILE_RE = /(^|\/)(?:\.env(?:\.[^/]*)?|\.envrc|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.htpasswd|id_(?:rsa|dsa|ecdsa|ed25519)|credentials?(?:\.[^/]*)?|secrets?(?:\.[^/]*)?|client[_-]?secret[^/]*|service[-_]?account[^/]*|firebase[-_]?adminsdk[^/]*|[^/]*(?:token|apikey|api_key)[^/]*)$/i;
++const SECRET_EXTENSION_RE = /\.(?:pem|key|p12|pfx|jks|keystore|ppk|kdbx|der|pkcs12|ovpn|mobileprovision)$/i;
++const MODEL_PREFERENCE = ["qwen2.5-coder", "llama3.2", "codellama", "mistral"];
++const SAFE_SOURCE_EXTENSION_RE = /\.(?:c|cc|cpp|cs|css|go|graphql|h|hpp|html|java|js|jsx|json|kt|kts|md|mjs|php|prisma|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|vue|xml|ya?ml)$/i;
++
++function runGit(cwd, args, options = {}) {
++  return new Promise((resolve) => {
++    let settled = false;
++    const finish = (result) => {
++      if (settled) return;
++      settled = true;
++      resolve(result);
++    };
++    const child = execFile("git", args, {
++      cwd,
++      encoding: "utf8",
++      windowsHide: true,
++      timeout: options.timeout || 10_000,
++      maxBuffer: options.maxBuffer || 2 * 1024 * 1024,
++      env: Object.assign({}, process.env, {
++        GIT_TERMINAL_PROMPT: "0",
++        GCM_INTERACTIVE: "never",
++        LC_ALL: process.env.LC_ALL || "C",
++        LANG: process.env.LANG || "C"
++      })
++    }, (error, stdout, stderr) => finish({
++      ok: !error,
++      stdout: stdout || "",
++      stderr: stderr || (error && error.message) || ""
++    }));
++    child.on("error", (error) => finish({ ok: false, stdout: "", stderr: error.message }));
++  });
++}
++
++function normalizePath(value) {
++  return String(value || "").replace(/\\/g, "/").replace(/^\.\//, "");
++}
++
++function isSensitivePath(value) {
++  const clean = normalizePath(value).replace(/^a\//, "").replace(/^b\//, "");
++  return SECRET_FILE_RE.test(clean) || SECRET_EXTENSION_RE.test(clean);
++}
++
++function redactSecrets(value) {
++  return String(value || "")
++    .replace(/-----BEGIN [^-\r\n]+-----[\s\S]*?-----END [^-\r\n]+-----/g, "[REDACTED]")
++    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[REDACTED]")
++    .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "[REDACTED]")
++    .replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g, "[REDACTED]")
++    .replace(/\b[A-Fa-f0-9]{32,}\b/g, "[REDACTED]")
++    .replace(/\b(?:[A-Za-z0-9+/]{40,}={0,2})\b/g, "[REDACTED]")
++    .replace(/(^|\n)([+\- ]?\s*(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|secret)\s*[:=]\s*)([^\r\n]+)/gi, "$1$2[REDACTED]");
++}
++
++function diffSectionPath(section) {
++  const header = section.match(/^diff --git\s+"?a\/(.+?)"?\s+"?b\/(.+?)"?(?:\r?\n|$)/);
++  return header ? header[2] : "";
++}
++
++function scrubDiff(diff) {
++  const source = String(diff || "").replace(/\r\n/g, "\n");
++  const parts = source.split(/(?=^diff --git )/m);
++  const kept = [];
++  for (const part of parts) {
++    if (!part) continue;
++    const file = diffSectionPath(part);
++    if (file && isSensitivePath(file)) {
++      kept.push("diff --git [REDACTED SENSITIVE FILE]\n");
++      continue;
++    }
++    kept.push(part);
++  }
++  return redactSecrets(kept.join(""));
++}
++
++function scrubStat(stat) {
++  return String(stat || "").split(/\r?\n/).filter((line) => {
++    const file = line.split("|")[0].trim();
++    return !file || !isSensitivePath(file);
++  }).join("\n");
++}
++
++function truncateUtf8(value, maxBytes = MAX_DIFF_BYTES) {
++  const input = String(value || "");
++  const buffer = Buffer.from(input, "utf8");
++  if (buffer.length <= maxBytes) return { text: input, truncated: false, bytes: buffer.length };
++  let text = buffer.subarray(0, Math.max(0, maxBytes - 30)).toString("utf8");
++  if (text.endsWith("\uFFFD")) text = text.slice(0, -1);
++  text += "\n[DIFF TRUNCATED]";
++  return { text, truncated: true, bytes: Buffer.byteLength(text, "utf8") };
++}
++
++function parsePorcelain(text) {
++  const entries = [];
++  const records = String(text || "").split("\0");
++  for (let i = 0; i < records.length; i += 1) {
++    const record = records[i];
++    if (!record || record.length < 4) continue;
++    const status = record.slice(0, 2);
++    let file = normalizePath(record.slice(3));
++    if ((status.includes("R") || status.includes("C")) && records[i + 1]) {
++      file = normalizePath(records[i + 1]);
++      i += 1;
++    }
++    entries.push({ status, file, sensitive: isSensitivePath(file) });
++  }
++  return entries;
++}
++
++async function readUntrackedExcerpts(repoPath, files, options = {}) {
++  const excerpts = [];
++  const maxFileBytes = options.maxUntrackedFileBytes || 128 * 1024;
++  const maxExcerptBytes = options.maxUntrackedExcerptBytes || 3 * 1024;
++  for (const file of files.slice(0, 12)) {
++    if (!SAFE_SOURCE_EXTENSION_RE.test(file) || isSensitivePath(file)) continue;
++    const absolute = path.resolve(repoPath, file);
++    const relative = path.relative(repoPath, absolute);
++    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) continue;
++    try {
++      const stat = await fs.promises.stat(absolute);
++      if (!stat.isFile() || stat.size > maxFileBytes) continue;
++      const handle = await fs.promises.open(absolute, "r");
++      try {
++        const buffer = Buffer.alloc(Math.min(maxExcerptBytes, Math.max(1, stat.size)));
++        const read = await handle.read(buffer, 0, buffer.length, 0);
++        const content = buffer.subarray(0, read.bytesRead).toString("utf8");
++        if (content.includes("\0")) continue;
++        excerpts.push("New file: " + file + "\n" + redactSecrets(content));
++      } finally {
++        await handle.close();
++      }
++    } catch (error) {}
++  }
++  return excerpts;
++}
++
++async function extractRepoDiffSummary(repoPath, options = {}) {
++  const git = options.runGit || runGit;
++  const [statusResult, stagedStat, stagedDiff, workStat, workDiff] = await Promise.all([
++    git(repoPath, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
++    git(repoPath, ["diff", "--cached", "--stat", "--no-color"]),
++    git(repoPath, ["diff", "--cached", "-U1", "--no-color"]),
++    git(repoPath, ["diff", "--stat", "--no-color"]),
++    git(repoPath, ["diff", "-U1", "--no-color"])
++  ]);
++  if (!statusResult.ok) throw new Error("Could not read Git status for " + path.basename(repoPath));
++
++  const entries = parsePorcelain(statusResult.stdout);
++  const visible = entries.filter((entry) => !entry.sensitive);
++  const sensitiveFiles = entries.filter((entry) => entry.sensitive).map((entry) => entry.file);
++  const untracked = visible.filter((entry) => entry.status === "??").map((entry) => entry.file);
++  const untrackedExcerpts = await readUntrackedExcerpts(repoPath, untracked, options);
++  const statusLines = visible.map((entry) => entry.status + " " + entry.file).join("\n");
++  const body = [
++    "Repository: " + path.basename(repoPath),
++    statusLines ? "Status:\n" + statusLines : "Status: clean",
++    untrackedExcerpts.length ? "Safe untracked source excerpts:\n" + untrackedExcerpts.join("\n\n") : "",
++    scrubStat(stagedStat.stdout) ? "Staged stat:\n" + scrubStat(stagedStat.stdout) : "",
++    scrubDiff(stagedDiff.stdout) ? "Staged diff:\n" + scrubDiff(stagedDiff.stdout) : "",
++    scrubStat(workStat.stdout) ? "Working tree stat:\n" + scrubStat(workStat.stdout) : "",
++    scrubDiff(workDiff.stdout) ? "Working tree diff:\n" + scrubDiff(workDiff.stdout) : "",
++    untracked.length ? "Untracked files (names only):\n" + untracked.join("\n") : "",
++    sensitiveFiles.length ? "Sensitive files omitted: " + sensitiveFiles.length : ""
++  ].filter(Boolean).join("\n\n");
++  const bounded = truncateUtf8(redactSecrets(body), options.maxBytes || MAX_DIFF_BYTES);
++  return {
++    repo: path.basename(repoPath),
++    path: repoPath,
++    summary: bounded.text,
++    bytes: bounded.bytes,
++    truncated: bounded.truncated,
++    files: visible.map((entry) => entry.file),
++    changes: visible,
++    sensitiveFileCount: sensitiveFiles.length
++  };
++}
++
++function buildPrompt(diffSummary) {
++  const text = Array.isArray(diffSummary)
++    ? diffSummary.map((item) => item.summary || String(item)).join("\n\n---\n\n")
++    : (diffSummary && diffSummary.summary) || String(diffSummary || "");
++  return [
++    "You are a conventional commit generator.",
++    "Analyze the sanitized git change summary below.",
++    "Return ONLY a JSON array containing exactly 3 distinct strings.",
++    "Every string must match: <type>(<scope>): <imperative summary>",
++    "Allowed types: feat, fix, refactor, docs, chore, test, perf, style.",
++    "Use a short lowercase scope and a concise present-tense imperative summary.",
++    "Name the concrete behavior, endpoint, component, or symbol changed in the code.",
++    "Avoid generic summaries such as update behavior, update files, make changes, or improve code.",
++    "Option 1: primary functional change. Option 2: architectural perspective. Option 3: minimal summary.",
++    "Do not use markdown, explanations, issue numbers, or trailing periods.",
++    "\nSANITIZED LOCAL CHANGES\n" + text
++  ].join("\n");
++}
++
++function scopeFromFiles(files, summaries) {
++  const list = (files || []).map(normalizePath).filter(Boolean);
++  const roots = list.map((file) => {
++    const bits = file.split("/").filter(Boolean);
++    if (bits.length > 1 && !["src", "lib", "app", "packages"].includes(bits[0].toLowerCase())) return bits[0];
++    if (bits.length > 1) return bits[1].replace(/\.[^.]+$/, "");
++    return bits[0] ? bits[0].replace(/\.[^.]+$/, "") : "repo";
++  });
++  if (!roots.length && summaries && summaries.length === 1) roots.push(summaries[0].repo || "repo");
++  const counts = new Map();
++  for (const root of roots) counts.set(root, (counts.get(root) || 0) + 1);
++  const selected = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
++  return String(selected ? selected[0] : "workspace").toLowerCase().replace(/[^a-z0-9._/-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30) || "workspace";
++}
++
++function heuristicCommitSuggestions(input) {
++  const summaries = Array.isArray(input) ? input : [input || {}];
++  const changes = summaries.flatMap((item) => item.changes || []);
++  const files = summaries.flatMap((item) => item.files || []);
++  const scope = scopeFromFiles(files, summaries);
++  const lowerFiles = files.map((file) => normalizePath(file).toLowerCase());
++  const allDocs = lowerFiles.length > 0 && lowerFiles.every((file) => /(^|\/)(docs?\/|readme(?:\.|$)|[^/]+\.md$)/.test(file));
++  const allTests = lowerFiles.length > 0 && lowerFiles.every((file) => /(^|\/)(test|tests|spec|__tests__)(\/|$)|\.(?:test|spec)\.[^/]+$/.test(file));
++  const hasAdded = changes.some((entry) => entry.status.includes("A") || entry.status === "??");
++  const hasDeleted = changes.some((entry) => entry.status.includes("D"));
++  let primaryType = "fix";
++  let primarySummary = "update changed behavior";
++  if (allDocs) {
++    primaryType = "docs";
++    primarySummary = "update project documentation";
++  } else if (allTests) {
++    primaryType = "test";
++    primarySummary = "expand automated coverage";
++  } else if (hasAdded && !changes.some((entry) => entry.status !== "??" && !entry.status.includes("A"))) {
++    primaryType = "feat";
++    primarySummary = "introduce new functionality";
++  } else if (hasAdded && hasDeleted) {
++    primaryType = "refactor";
++    primarySummary = "streamline the implementation";
++  } else if (hasDeleted && !hasAdded) {
++    primaryType = "refactor";
++    primarySummary = "remove obsolete implementation";
++  }
++  const options = [
++    `${primaryType}(${scope}): ${primarySummary}`,
++    `refactor(${scope}): clarify the change structure`,
++    `chore(${scope}): update repository files`
++  ];
++  if (primaryType === "refactor") options[1] = `fix(${scope}): align changed behavior`;
++  if (primaryType === "chore") options[2] = `fix(${scope}): align changed behavior`;
++  return options;
++}
++
++function pickModel(models) {
++  const names = (models || []).map((model) => typeof model === "string" ? model : (model && (model.name || model.id))).filter(Boolean);
++  for (const preferred of MODEL_PREFERENCE) {
++    const found = names.find((name) => name.toLowerCase().includes(preferred));
++    if (found) return found;
++  }
++  return names[0] || "";
++}
++
++function pickOmniRouteModel(models) {
++  const names = (models || []).map((model) => typeof model === "string" ? model : (model && (model.id || model.name))).filter(Boolean);
++  const preferred = [
++    "auto/best-coding-fast",
++    "auto/best-coding",
++    "auto/pro-coding",
++    "auto/coding",
++    "auto/coding:reliable",
++    "auto/coding:fast"
++  ];
++  for (const id of preferred) {
++    const exact = names.find((name) => name.toLowerCase() === id);
++    if (exact) return exact;
++  }
++  return names.find((name) => /(?:coding|coder|code)/i.test(name)) || names[0] || "";
++}
++
++async function fetchJson(url, init = {}, options = {}) {
++  const fetchImpl = options.fetch || globalThis.fetch;
++  if (typeof fetchImpl !== "function") throw new Error("fetch unavailable");
++  const controller = new AbortController();
++  const timer = setTimeout(() => controller.abort(), options.timeoutMs || PROVIDER_TIMEOUT_MS);
++  if (typeof timer.unref === "function") timer.unref();
++  try {
++    const response = await fetchImpl(url, Object.assign({}, init, { signal: controller.signal }));
++    if (!response.ok) throw new Error("Provider returned HTTP " + response.status);
++    return await response.json();
++  } finally {
++    clearTimeout(timer);
++  }
++}
++
++async function queryOllama(prompt, options = {}) {
++  const baseUrl = options.baseUrl || "http://127.0.0.1:11434";
++  const tags = await fetchJson(baseUrl + "/api/tags", {}, options);
++  const model = options.model || pickModel(tags.models);
++  if (!model) throw new Error("No Ollama model is installed");
++  const result = await fetchJson(baseUrl + "/api/generate", {
++    method: "POST",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify({ model, prompt, stream: false, format: "json", options: { temperature: 0.2 } })
++  }, options);
++  return { provider: "ollama", model, content: result.response || "" };
++}
++
++async function queryLocalOpenAI(prompt, options = {}) {
++  const baseUrl = options.baseUrl || "http://127.0.0.1:1234/v1";
++  const models = await fetchJson(baseUrl + "/models", {}, options);
++  const model = options.model || pickModel(models.data);
++  if (!model) throw new Error("No LM Studio model is loaded");
++  const result = await fetchJson(baseUrl + "/chat/completions", {
++    method: "POST",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify({
++      model,
++      temperature: 0.2,
++      response_format: { type: "json_object" },
++      messages: [{ role: "system", content: "Return JSON only." }, { role: "user", content: prompt }]
++    })
++  }, options);
++  const content = result.choices && result.choices[0] && result.choices[0].message && result.choices[0].message.content;
++  return { provider: "lm-studio", model, content: content || "" };
++}
++
++async function queryOmniRoute(prompt, options = {}) {
++  const allowed = options.allowCloud === true || process.env.ALLOW_CLOUD_AI === "1";
++  const apiKey = options.omniRouteApiKey || process.env.OMNIROUTE_API_KEY;
++  if (!allowed || !apiKey) throw new Error("OmniRoute cloud routing is disabled");
++  const baseUrl = String(options.omniRouteUrl || process.env.OMNIROUTE_BASE_URL || "http://127.0.0.1:20128/v1").replace(/\/+$/, "");
++  const requestOptions = Object.assign({}, options, { timeoutMs: options.omniRouteTimeoutMs || 30_000 });
++  const headers = { "Content-Type": "application/json", Authorization: "Bearer " + apiKey };
++  let model = options.omniRouteModel || process.env.OMNIROUTE_MODEL || "";
++  if (!model) {
++    const models = await fetchJson(baseUrl + "/models", { headers }, requestOptions);
++    model = pickOmniRouteModel(models.data);
++  }
++  if (!model) throw new Error("No OmniRoute chat model is available");
++  const result = await fetchJson(baseUrl + "/chat/completions", {
++    method: "POST",
++    headers,
++    body: JSON.stringify({
++      model,
++      stream: false,
++      temperature: 0.15,
++      max_tokens: 1200,
++      reasoning_effort: "low",
++      messages: [
++        { role: "system", content: "Generate precise Conventional Commit messages from code diffs. Return JSON only." },
++        { role: "user", content: prompt }
++      ]
++    })
++  }, requestOptions);
++  const content = result.choices && result.choices[0] && result.choices[0].message && result.choices[0].message.content;
++  return { provider: "omniroute", model, content: content || "" };
++}
++
++async function queryGemini(prompt, options = {}) {
++  const apiKey = options.apiKey || process.env.GEMINI_API_KEY;
++  const allowed = options.allowCloud === true || process.env.ALLOW_CLOUD_AI === "1";
++  if (!allowed || !apiKey) throw new Error("Cloud AI is disabled");
++  const model = options.model || process.env.GEMINI_MODEL || "gemini-2.5-flash";
++  const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent";
++  const result = await fetchJson(endpoint, {
++    method: "POST",
++    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
++    body: JSON.stringify({
++      contents: [{ parts: [{ text: prompt }] }],
++      generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
++    })
++  }, options);
++  const content = result.candidates && result.candidates[0] && result.candidates[0].content && result.candidates[0].content.parts && result.candidates[0].content.parts[0] && result.candidates[0].content.parts[0].text;
++  return { provider: "gemini", model, content: content || "" };
++}
++
++function parseSuggestions(content) {
++  let value = content;
++  if (typeof value === "string") {
++    const clean = value.trim()
++      .replace(/<think>[\s\S]*?<\/think>/gi, "")
++      .replace(/```(?:json)?\s*/gi, "")
++      .replace(/```/g, "")
++      .trim();
++    try { value = JSON.parse(clean); } catch (error) {
++      let extracted = null;
++      for (let start = clean.indexOf("["); start !== -1; start = clean.indexOf("[", start + 1)) {
++        const end = clean.lastIndexOf("]");
++        if (end <= start) break;
++        try {
++          const candidate = JSON.parse(clean.slice(start, end + 1));
++          if (Array.isArray(candidate)) { extracted = candidate; break; }
++        } catch (parseError) {}
++      }
++      value = extracted || clean.split(/\r?\n/).map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, ""));
++    }
++  }
++  if (value && !Array.isArray(value) && typeof value === "object") {
++    value = value.suggestions || value.commits || value.messages || Object.values(value);
++  }
++  const seen = new Set();
++  return (Array.isArray(value) ? value : []).map(String).map((item) => item.trim()).filter((item) => {
++    const match = item.match(CONVENTIONAL_COMMIT_RE);
++    if (!match) return false;
++    const type = match[1];
++    if (!ALLOWED_TYPES.has(type) || seen.has(item)) return false;
++    seen.add(item);
++    return true;
++  }).slice(0, 3);
++}
++
++function completeSuggestions(candidate, fallback) {
++  const output = [];
++  for (const item of [...parseSuggestions(candidate), ...fallback]) {
++    if (CONVENTIONAL_COMMIT_RE.test(item) && !output.includes(item)) output.push(item);
++    if (output.length === 3) break;
++  }
++  return output;
++}
++
++async function suggestCommitMessages(repoPaths, options = {}) {
++  const paths = Array.isArray(repoPaths) ? repoPaths : [repoPaths];
++  const summaries = [];
++  let remaining = options.maxBytes || MAX_DIFF_BYTES;
++  for (const repoPath of paths) {
++    if (remaining <= 0) break;
++    const summary = await extractRepoDiffSummary(repoPath, Object.assign({}, options, { maxBytes: remaining }));
++    summaries.push(summary);
++    remaining -= summary.bytes;
++  }
++  const fallback = heuristicCommitSuggestions(summaries);
++  const prompt = buildPrompt(summaries);
++  const providers = options.providers || [queryOllama, queryLocalOpenAI, queryOmniRoute, queryGemini];
++  for (const provider of providers) {
++    if ((provider === queryOmniRoute || provider === queryGemini) && !(options.allowCloud === true || process.env.ALLOW_CLOUD_AI === "1")) continue;
++    try {
++      const result = await provider(prompt, options);
++      const suggestions = completeSuggestions(result.content, fallback);
++      if (suggestions.length === 3) return Object.assign({}, result, { suggestions });
++    } catch (error) {
++      // Provider discovery is best effort. The deterministic fallback below is
++      // part of the product contract, not an error state.
++    }
++  }
++  return { provider: "heuristic", model: null, suggestions: fallback };
++}
++
++async function getLocalAiStatus(options = {}) {
++  try {
++    const tags = await fetchJson((options.ollamaUrl || "http://127.0.0.1:11434") + "/api/tags", {}, options);
++    const model = pickModel(tags.models);
++    if (model) return { available: true, provider: "ollama", model, offline: true };
++  } catch (error) {}
++  try {
++    const models = await fetchJson((options.lmStudioUrl || "http://127.0.0.1:1234/v1") + "/models", {}, options);
++    const model = pickModel(models.data);
++    if (model) return { available: true, provider: "lm-studio", model, offline: true };
++  } catch (error) {}
++  const cloudAllowed = options.allowCloud === true || process.env.ALLOW_CLOUD_AI === "1";
++  const omniRouteApiKey = options.omniRouteApiKey || process.env.OMNIROUTE_API_KEY;
++  if (cloudAllowed && omniRouteApiKey) {
++    try {
++      const baseUrl = String(options.omniRouteUrl || process.env.OMNIROUTE_BASE_URL || "http://127.0.0.1:20128/v1").replace(/\/+$/, "");
++      const models = await fetchJson(baseUrl + "/models", {
++        headers: { Authorization: "Bearer " + omniRouteApiKey }
++      }, options);
++      const configured = options.omniRouteModel || process.env.OMNIROUTE_MODEL || "";
++      const model = configured || pickOmniRouteModel(models.data);
++      if (model) return { available: true, provider: "omniroute", model, offline: false };
++    } catch (error) {}
++  }
++  return { available: false, provider: "heuristic", model: null, offline: true };
++}
++
++module.exports = {
++  CONVENTIONAL_COMMIT_RE,
++  MAX_DIFF_BYTES,
++  buildPrompt,
++  extractRepoDiffSummary,
++  getLocalAiStatus,
++  heuristicCommitSuggestions,
++  isSensitivePath,
++  parseSuggestions,
++  queryGemini,
++  queryLocalOpenAI,
++  queryOllama,
++  queryOmniRoute,
++  redactSecrets,
++  scrubDiff,
++  suggestCommitMessages,
++  truncateUtf8
++};
+diff --git a/commit-engine-original.js b/commit-engine-original.js
+new file mode 100644
+index 0000000..ffe3e02
+--- /dev/null
++++ b/commit-engine-original.js
+@@ -0,0 +1,725 @@
++"use strict";
++
++/**
++ * Local commit engine.
++ *
++ * This module is intentionally separate from the read-only GitHub bridge. It
++ * only runs when the bridge is started with ENABLE_COMMIT_NOW=1 on a loopback
++ * listener. All filesystem paths are resolved and validated before a git
++ * process starts, and every git call is made with execFile (no shell).
++ */
++
++const fs = require("fs");
++const fsp = fs.promises;
++const os = require("os");
++const path = require("path");
++const { execFile } = require("child_process");
++
++const DEFAULT_MAX_DEPTH = 3;
++const MAX_SCAN_MS = 8000;
++const MAX_SCAN_ENTRIES = 6000;
++const MAX_REPOS = 200;
++const MAX_LIST_ENTRIES = 500;
++const GIT_TIMEOUT_MS = 20000;
++const PUSH_TIMEOUT_MS = 90000;
++const MAX_STATUS_BUFFER = 12 * 1024 * 1024;
++
++// Dependency, build, cache and system folders that should never be walked.
++// Dot-directories are skipped separately, so .git/.venv/.next are covered.
++const SKIP_DIRS = new Set([
++  "node_modules",
++  "venv",
++  "env",
++  "dist",
++  "build",
++  "out",
++  "target",
++  "bin",
++  "obj",
++  "vendor",
++  "coverage",
++  "__pycache__",
++  "appdata",
++  "windows",
++  "program files",
++  "program files (x86)",
++  "programdata",
++  "$recycle.bin",
++  "system volume information",
++  "pods",
++  "deriveddata"
++]);
++
++const SECRET_PATTERNS = [
++  /^\.env(?:\..+)?$/i,
++  /^\.npmrc$/i,
++  /^\.pypirc$/i,
++  /^\.netrc$/i,
++  /^\.htpasswd$/i,
++  /^id_(?:rsa|dsa|ecdsa|ed25519)$/i,
++  /^credentials(?:\..+)?$/i,
++  /^secrets?(?:\..+)?$/i,
++  /^(?:service[-_]?account|firebase[-_]?adminsdk)(?:[-_.].*)?\.json$/i,
++  /\.(?:pem|key|p12|pfx|jks|keystore|ppk|kdbx)$/i
++];
++
++function runGit(cwd, args, options = {}) {
++  return new Promise((resolve) => {
++    const child = execFile(
++      "git",
++      args,
++      {
++        cwd,
++        timeout: options.timeout || GIT_TIMEOUT_MS,
++        windowsHide: true,
++        maxBuffer: options.maxBuffer || MAX_STATUS_BUFFER,
++        encoding: "utf8",
++        env: Object.assign({}, process.env, {
++          GIT_TERMINAL_PROMPT: "0",
++          GCM_INTERACTIVE: "never",
++          GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND || "ssh -o BatchMode=yes",
++          LC_ALL: process.env.LC_ALL || "C",
++          LANG: process.env.LANG || "C"
++        }, options.env || {})
++      },
++      (error, stdout, stderr) => {
++        resolve({
++          ok: !error,
++          code: error && typeof error.code === "number" ? error.code : (error ? 1 : 0),
++          timedOut: Boolean(error && error.killed),
++          stdout: stdout || "",
++          stderr: stderr || (error && error.message ? error.message : "")
++        });
++      }
++    );
++    child.on("error", (error) => {
++      resolve({ ok: false, code: 1, timedOut: false, stdout: "", stderr: error.message });
++    });
++  });
++}
++
++function normalizeUserPath(input) {
++  if (typeof input !== "string") return null;
++  let value = input.trim();
++  if (!value || value.length > 4096 || value.indexOf("\0") !== -1) return null;
++  // On Windows, "C:" means the current directory on that drive, not the root.
++  if (process.platform === "win32" && /^[a-zA-Z]:$/.test(value)) value += "\\";
++  return path.resolve(value);
++}
++
++async function resolveDirectory(input) {
++  const resolved = normalizeUserPath(input);
++  if (!resolved) return { ok: false, error: "invalid_path" };
++  let real;
++  try {
++    real = await fsp.realpath(resolved);
++  } catch (error) {
++    return { ok: false, error: error.code === "EACCES" ? "permission_denied" : "not_found" };
++  }
++  let stat;
++  try {
++    stat = await fsp.stat(real);
++  } catch (error) {
++    return { ok: false, error: "not_found" };
++  }
++  if (!stat.isDirectory()) return { ok: false, error: "not_a_directory" };
++  return { ok: true, path: real };
++}
++
++function samePath(left, right) {
++  const a = path.resolve(String(left));
++  const b = path.resolve(String(right));
++  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
++}
++
++function isPathInside(root, target) {
++  let base = path.resolve(String(root));
++  let candidate = path.resolve(String(target));
++  if (process.platform === "win32") {
++    base = base.toLowerCase();
++    candidate = candidate.toLowerCase();
++  }
++  const relative = path.relative(base, candidate);
++  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
++}
++
++function shouldSkipDirectory(name) {
++  if (!name || name.startsWith(".")) return true;
++  return SKIP_DIRS.has(name.toLowerCase());
++}
++
++function shortcutList(current) {
++  const shortcuts = [];
++  const seen = new Set();
++  function add(label, value) {
++    if (!value) return;
++    const resolved = path.resolve(value);
++    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
++    if (seen.has(key)) return;
++    try {
++      if (!fs.statSync(resolved).isDirectory()) return;
++    } catch (error) {
++      return;
++    }
++    seen.add(key);
++    shortcuts.push({ label, path: resolved });
++  }
++  add("Home", os.homedir());
++  add("Workspace", process.cwd());
++  const driveRoot = path.parse(current).root;
++  if (driveRoot) add("Drive root", driveRoot);
++  // A conventional projects folder is offered when it exists, but it is never
++  // assumed to be the selected root.
++  const conventional = path.join(path.parse(os.homedir()).root, "Projects");
++  add("Projects", conventional);
++  return shortcuts;
++}
++
++async function listDirectories(input) {
++  const requested = input || os.homedir();
++  const resolved = await resolveDirectory(requested);
++  if (!resolved.ok) return resolved;
++  const dir = resolved.path;
++  let dirents;
++  try {
++    dirents = await fsp.readdir(dir, { withFileTypes: true });
++  } catch (error) {
++    return { ok: false, error: error.code === "EACCES" ? "permission_denied" : "not_found" };
++  }
++
++  const entries = [];
++  for (const dirent of dirents) {
++    if (!dirent.isDirectory()) continue;
++    const name = dirent.name;
++    if (shouldSkipDirectory(name)) continue;
++    const full = path.join(dir, name);
++    let isRepo = false;
++    try {
++      isRepo = fs.existsSync(path.join(full, ".git"));
++    } catch (error) {
++      isRepo = false;
++    }
++    entries.push({ name, path: full, isRepo });
++  }
++  entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
++
++  const parent = path.dirname(dir);
++  return {
++    ok: true,
++    path: dir,
++    parent: parent && parent !== dir ? parent : null,
++    isRepo: fs.existsSync(path.join(dir, ".git")),
++    entries: entries.slice(0, MAX_LIST_ENTRIES),
++    truncated: entries.length > MAX_LIST_ENTRIES,
++    shortcuts: shortcutList(dir)
++  };
++}
++
++function detectOperation(gitDir) {
++  const checks = [
++    ["MERGE_HEAD", "merge_in_progress"],
++    ["CHERRY_PICK_HEAD", "cherry_pick_in_progress"],
++    ["REVERT_HEAD", "revert_in_progress"],
++    ["BISECT_LOG", "bisect_in_progress"]
++  ];
++  for (const [file, reason] of checks) {
++    try {
++      if (fs.existsSync(path.join(gitDir, file))) return reason;
++    } catch (error) {
++      // A git dir that disappeared is handled by the caller.
++    }
++  }
++  try {
++    if (fs.existsSync(path.join(gitDir, "rebase-merge"))) return "rebase_in_progress";
++    if (fs.existsSync(path.join(gitDir, "rebase-apply"))) return "rebase_in_progress";
++  } catch (error) {
++    // Ignore a transient stat failure.
++  }
++  return "";
++}
++
++function parseStatus(stdout) {
++  const entries = [];
++  const parts = String(stdout || "").split("\0");
++  for (let i = 0; i < parts.length; i++) {
++    const part = parts[i];
++    if (!part || part.length < 3) continue;
++    const code = part.slice(0, 2);
++    const file = part.slice(3);
++    if (!file) continue;
++    entries.push({ code, file });
++    // Rename/copy records carry the original path in the next NUL field.
++    if (code[0] === "R" || code[0] === "C") i += 1;
++  }
++  return entries;
++}
++
++function isConflictCode(code) {
++  return code === "DD" || code === "AA" || code === "AU" || code === "UA" ||
++    code === "DU" || code === "UD" || code === "UU" ||
++    code[0] === "U" || code[1] === "U";
++}
++
++function isLikelySecret(file) {
++  const base = path.basename(String(file || ""));
++  if (!base) return false;
++  if (/\.(?:example|sample|template|dist|pub)$/i.test(base)) return false;
++  return SECRET_PATTERNS.some((pattern) => pattern.test(base));
++}
++
++function findSecrets(changes) {
++  const found = [];
++  for (const entry of changes) {
++    if (!isLikelySecret(entry.file)) continue;
++    if (found.indexOf(entry.file) === -1) found.push(entry.file);
++  }
++  return found.slice(0, 12);
++}
++
++function remoteLabel(url) {
++  const raw = String(url || "").trim();
++  if (!raw) return "";
++  // Local path remotes and file:// URLs have no host. Show a short, stable
++  // label instead of turning the drive letter into a fake hostname.
++  if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith("\\\\") || raw.startsWith("/") ||
++      raw.startsWith("./") || raw.startsWith("../") || /^file:\/\//i.test(raw)) {
++    let localPath = raw.replace(/^file:\/\//i, "").replace(/[\\/]+$/, "");
++    try { localPath = decodeURIComponent(localPath); } catch (error) {}
++    const localName = path.basename(localPath) || "repository";
++    const localLabel = "local · " + localName;
++    return localLabel.length > 90 ? localLabel.slice(0, 87) + "..." : localLabel;
++  }
++  let host = "";
++  let repoPath = "";
++  try {
++    if (/^https?:\/\//i.test(raw)) {
++      const parsed = new URL(raw);
++      host = parsed.hostname;
++      repoPath = parsed.pathname.replace(/^\/+/, "").replace(/\.git$/i, "");
++    } else {
++      const match = raw.match(/^(?:ssh:\/\/)?(?:[^@/]+@)?([^:/]+)[:/](.+)$/);
++      if (match) {
++        host = match[1];
++        repoPath = match[2].replace(/^\/+/, "").replace(/\.git$/i, "");
++      }
++    }
++  } catch (error) {
++    host = "";
++  }
++  const label = host ? host.replace(/^www\./i, "") + (repoPath ? "/" + repoPath : "") : raw.replace(/\/\/[^@/]+@/, "//");
++  return label.length > 90 ? label.slice(0, 87) + "..." : label;
++}
++
++function skipReasonLabel(reason) {
++  const labels = {
++    detached_head: "Detached HEAD; checkout a branch first.",
++    merge_in_progress: "Merge in progress; finish it first.",
++    rebase_in_progress: "Rebase in progress; finish it first.",
++    cherry_pick_in_progress: "Cherry-pick in progress; finish it first.",
++    revert_in_progress: "Revert in progress; finish it first.",
++    bisect_in_progress: "Bisect in progress; finish it first.",
++    merge_conflict: "Unmerged paths; resolve conflicts first.",
++    submodule: "Submodule checkout; commit it from its parent repository.",
++    bare_repo: "Bare repository; no working tree to commit.",
++    clean: "Clean; already up to date.",
++    clean_no_upstream: "Clean; no upstream branch.",
++    behind_remote: "Clean; remote has newer commits.",
++    diverged: "Clean; local and remote branches have diverged.",
++    status_failed: "Could not read git status.",
++    not_a_repo: "Not a Git repository."
++  };
++  return labels[reason] || "Skipped.";
++}
++
++async function inspectRepo(dir) {
++  const name = path.basename(dir);
++  const topLevel = await runGit(dir, ["rev-parse", "--show-toplevel"]);
++  if (!topLevel.ok) {
++    return { ok: false, path: dir, name, reason: "not_a_repo", message: sanitizeGitOutput(topLevel.stderr) || "Not a Git repository." };
++  }
++  // Status and commit operate on the resolved top-level so a directory that
++  // points into a worktree never gets treated as a separate repository.
++  const top = path.resolve(topLevel.stdout.trim() || dir);
++
++  const bare = await runGit(top, ["rev-parse", "--is-bare-repository"]);
++  if (bare.ok && bare.stdout.trim() === "true") {
++    return { ok: true, path: top, name, branch: "", actionable: false, skipReason: "bare_repo", skipLabel: skipReasonLabel("bare_repo"), changed: false, changeCount: 0, ahead: 0, behind: 0, secrets: [], remoteName: "", remoteUrl: "", remoteLabel: "", upstream: "", changes: [] };
++  }
++
++  const superproject = await runGit(top, ["rev-parse", "--show-superproject-working-tree"]);
++  if (superproject.ok && superproject.stdout.trim()) {
++    return { ok: true, path: top, name, branch: "", actionable: false, skipReason: "submodule", skipLabel: skipReasonLabel("submodule"), changed: false, changeCount: 0, ahead: 0, behind: 0, secrets: [], remoteName: "", remoteUrl: "", remoteLabel: "", upstream: "", changes: [] };
++  }
++
++  const gitDirResult = await runGit(top, ["rev-parse", "--absolute-git-dir"]);
++  const gitDir = gitDirResult.ok ? gitDirResult.stdout.trim() : path.join(top, ".git");
++  const operation = detectOperation(gitDir);
++  if (operation) {
++    return { ok: true, path: top, name, branch: "", actionable: false, skipReason: operation, skipLabel: skipReasonLabel(operation), changed: false, changeCount: 0, ahead: 0, behind: 0, secrets: [], remoteName: "", remoteUrl: "", remoteLabel: "", upstream: "", changes: [] };
++  }
++
++  const branchResult = await runGit(top, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
++  const branch = branchResult.ok ? branchResult.stdout.trim() : "";
++  if (!branch) {
++    return { ok: true, path: top, name, branch: "", actionable: false, skipReason: "detached_head", skipLabel: skipReasonLabel("detached_head"), changed: false, changeCount: 0, ahead: 0, behind: 0, secrets: [], remoteName: "", remoteUrl: "", remoteLabel: "", upstream: "", changes: [] };
++  }
++
++  const remoteResult = await runGit(top, ["remote"]);
++  const remotes = remoteResult.ok
++    ? remoteResult.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)
++    : [];
++  const remoteName = remotes.indexOf("origin") !== -1 ? "origin" : (remotes[0] || "");
++  let remoteUrl = "";
++  if (remoteName) {
++    const urlResult = await runGit(top, ["remote", "get-url", remoteName]);
++    if (urlResult.ok) remoteUrl = urlResult.stdout.trim();
++  }
++
++  const upstreamResult = await runGit(top, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
++  const upstream = upstreamResult.ok ? upstreamResult.stdout.trim() : "";
++  let ahead = 0;
++  let behind = 0;
++  if (upstream) {
++    const counts = await runGit(top, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
++    if (counts.ok) {
++      const parts = counts.stdout.trim().split(/\s+/).map((value) => Number.parseInt(value, 10) || 0);
++      behind = parts[0] || 0;
++      ahead = parts[1] || 0;
++    }
++  }
++
++  const statusResult = await runGit(top, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
++  if (!statusResult.ok) {
++    return { ok: true, path: top, name, branch, actionable: false, skipReason: "status_failed", skipLabel: skipReasonLabel("status_failed"), changed: false, changeCount: 0, ahead, behind, secrets: [], remoteName, remoteUrl, remoteLabel: remoteLabel(remoteUrl), upstream, changes: [] };
++  }
++  const changes = parseStatus(statusResult.stdout);
++  const conflicts = changes.filter((entry) => isConflictCode(entry.code));
++  if (conflicts.length) {
++    return { ok: true, path: top, name, branch, actionable: false, skipReason: "merge_conflict", skipLabel: skipReasonLabel("merge_conflict"), changed: true, changeCount: changes.length, ahead, behind, secrets: [], remoteName, remoteUrl, remoteLabel: remoteLabel(remoteUrl), upstream, changes: changes.slice(0, 20) };
++  }
++
++  const changed = changes.length > 0;
++  const secrets = findSecrets(changes);
++  let skipReason = "";
++  if (!changed) {
++    if (!upstream) skipReason = "clean_no_upstream";
++    else if (behind > 0 && ahead > 0) skipReason = "diverged";
++    else if (behind > 0) skipReason = "behind_remote";
++    else if (ahead === 0) skipReason = "clean";
++  }
++  const canPushOnly = !changed && Boolean(upstream) && ahead > 0 && behind === 0;
++  const actionable = changed || canPushOnly;
++
++  return {
++    ok: true,
++    path: top,
++    name,
++    branch,
++    actionable,
++    action: changed ? "commit" : (canPushOnly ? "push" : "none"),
++    skipReason,
++    skipLabel: skipReason ? skipReasonLabel(skipReason) : "",
++    changed,
++    changeCount: changes.length,
++    changes: changes.slice(0, 20),
++    secrets,
++    remoteName,
++    remoteUrl,
++    remoteLabel: remoteLabel(remoteUrl),
++    upstream,
++    ahead,
++    behind
++  };
++}
++
++async function mapLimit(items, limit, fn) {
++  const results = new Array(items.length);
++  let next = 0;
++  const size = Math.max(1, Math.min(limit, items.length));
++  async function worker() {
++    while (true) {
++      const index = next++;
++      if (index >= items.length) return;
++      results[index] = await fn(items[index], index);
++    }
++  }
++  await Promise.all(Array.from({ length: size }, worker));
++  return results;
++}
++
++async function scanProjects(root, options = {}) {
++  const resolved = await resolveDirectory(root);
++  if (!resolved.ok) return resolved;
++  const startedAt = Date.now();
++  const deadline = startedAt + (options.timeBudgetMs || MAX_SCAN_MS);
++  const maxDepth = Math.min(Math.max(Number.isInteger(options.maxDepth) ? options.maxDepth : DEFAULT_MAX_DEPTH, 0), 6);
++  const found = [];
++  const seen = new Set();
++  let visited = 0;
++  let truncated = false;
++
++  async function realKey(dir) {
++    try {
++      const real = await fsp.realpath(dir);
++      return process.platform === "win32" ? real.toLowerCase() : real;
++    } catch (error) {
++      const resolvedDir = path.resolve(dir);
++      return process.platform === "win32" ? resolvedDir.toLowerCase() : resolvedDir;
++    }
++  }
++
++  async function walk(dir, depth) {
++    if (truncated) return;
++    if (Date.now() > deadline || visited >= MAX_SCAN_ENTRIES || found.length >= MAX_REPOS) {
++      truncated = true;
++      return;
++    }
++    visited += 1;
++    let isRepo = false;
++    try {
++      isRepo = fs.existsSync(path.join(dir, ".git"));
++    } catch (error) {
++      isRepo = false;
++    }
++    if (isRepo) {
++      const key = await realKey(dir);
++      if (!seen.has(key)) {
++        seen.add(key);
++        found.push(dir);
++      }
++      // Treat a repository as a boundary. Descending into it could discover
++      // nested repos that the parent would also stage as gitlinks.
++      return;
++    }
++    if (depth >= maxDepth) return;
++    let dirents;
++    try {
++      dirents = await fsp.readdir(dir, { withFileTypes: true });
++    } catch (error) {
++      return;
++    }
++    for (const dirent of dirents) {
++      if (truncated) return;
++      if (!dirent.isDirectory()) continue;
++      if (shouldSkipDirectory(dirent.name)) continue;
++      if (Date.now() > deadline) {
++        truncated = true;
++        return;
++      }
++      await walk(path.join(dir, dirent.name), depth + 1);
++    }
++  }
++
++  await walk(resolved.path, 0);
++
++  const inspected = await mapLimit(found, 4, async (dir) => inspectRepo(dir));
++  const repos = inspected.filter(Boolean);
++  repos.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
++
++  return {
++    ok: true,
++    root: resolved.path,
++    scannedAt: Date.now(),
++    repos,
++    truncated,
++    stats: {
++      visited,
++      found: found.length,
++      elapsedMs: Date.now() - startedAt
++    }
++  };
++}
++
++function formatTimestamp(date) {
++  const value = date instanceof Date ? date : new Date();
++  const pad = (number) => String(number).padStart(2, "0");
++  return value.getFullYear() + "-" + pad(value.getMonth() + 1) + "-" + pad(value.getDate()) +
++    " " + pad(value.getHours()) + ":" + pad(value.getMinutes());
++}
++
++function defaultCommitMessage(date) {
++  return "chore: checkpoint " + formatTimestamp(date);
++}
++
++function sanitizeGitOutput(text) {
++  return String(text || "")
++    .replace(/\x1b\[[0-9;]*m/g, "")
++    .replace(/https?:\/\/[^@\s/]+@/gi, "https://")
++    .replace(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]+/g, "[token]")
++    .replace(/\s+/g, " ")
++    .trim()
++    .slice(0, 700);
++}
++
++function resultBase(repo, message) {
++  return {
++    name: repo.name,
++    path: repo.path,
++    branch: repo.branch || "",
++    remoteLabel: repo.remoteLabel || "",
++    message: message || "",
++    committed: false,
++    pushed: false,
++    skipped: false,
++    failed: false,
++    status: "",
++    detail: "",
++    commit: ""
++  };
++}
++
++async function runCommit(repoOrPath, options = {}) {
++  const repoPath = typeof repoOrPath === "string" ? repoOrPath : repoOrPath.path;
++  const message = options.message || defaultCommitMessage();
++  const inspected = await inspectRepo(repoPath);
++  const base = resultBase(inspected.ok ? inspected : { name: path.basename(repoPath), path: repoPath, branch: "", remoteLabel: "" }, message);
++
++  if (!inspected.ok) {
++    return Object.assign(base, {
++      failed: true,
++      status: "failed",
++      detail: inspected.message || inspected.reason || "Could not inspect repository."
++    });
++  }
++  if (!inspected.actionable) {
++    return Object.assign(base, {
++      branch: inspected.branch || "",
++      remoteLabel: inspected.remoteLabel || "",
++      skipped: true,
++      status: "skipped",
++      detail: inspected.skipLabel || "Nothing to commit or push."
++    });
++  }
++
++  let committed = false;
++  let commitHash = "";
++  if (inspected.changed) {
++    const nameResult = await runGit(inspected.path, ["config", "user.name"]);
++    const emailResult = await runGit(inspected.path, ["config", "user.email"]);
++    if (!nameResult.ok || !emailResult.ok || !nameResult.stdout.trim() || !emailResult.stdout.trim()) {
++      return Object.assign(base, {
++        failed: true,
++        status: "failed",
++        detail: "Git user.name / user.email is not configured for this repository."
++      });
++    }
++
++    const addResult = await runGit(inspected.path, ["add", "-A"], { timeout: 30000 });
++    if (!addResult.ok) {
++      return Object.assign(base, {
++        failed: true,
++        status: "failed",
++        detail: "git add failed: " + (sanitizeGitOutput(addResult.stderr) || "unknown error")
++      });
++    }
++
++    const commitResult = await runGit(inspected.path, ["commit", "-m", message], { timeout: 60000 });
++    if (!commitResult.ok) {
++      return Object.assign(base, {
++        failed: true,
++        status: "failed",
++        detail: "git commit failed: " + (sanitizeGitOutput(commitResult.stderr || commitResult.stdout) || "unknown error")
++      });
++    }
++    committed = true;
++    const hashResult = await runGit(inspected.path, ["rev-parse", "--short", "HEAD"]);
++    if (hashResult.ok) commitHash = hashResult.stdout.trim();
++  }
++
++  if (!inspected.remoteName) {
++    return Object.assign(base, {
++      committed,
++      commit: commitHash,
++      status: committed ? "committed_no_remote" : "skipped",
++      skipped: !committed,
++      detail: committed
++        ? "Committed locally; no Git remote is configured."
++        : "No changes to push."
++    });
++  }
++
++  const pushArgs = inspected.upstream
++    ? ["push"]
++    : ["push", "-u", inspected.remoteName, inspected.branch];
++  const pushResult = await runGit(inspected.path, pushArgs, { timeout: PUSH_TIMEOUT_MS });
++  if (!pushResult.ok) {
++    return Object.assign(base, {
++      committed,
++      commit: commitHash,
++      failed: true,
++      status: committed ? "committed_push_failed" : "push_failed",
++      detail: "git push failed: " + (sanitizeGitOutput(pushResult.stderr || pushResult.stdout) || "unknown error")
++    });
++  }
++
++  return Object.assign(base, {
++    committed,
++    pushed: true,
++    commit: commitHash,
++    status: committed ? "committed_pushed" : "pushed",
++    detail: committed
++      ? "Committed and pushed to " + (inspected.remoteLabel || inspected.remoteName) + "."
++      : "Pushed existing commits to " + (inspected.remoteLabel || inspected.remoteName) + "."
++  });
++}
++
++function summarize(results) {
++  const list = Array.isArray(results) ? results : [];
++  return {
++    total: list.length,
++    committed: list.filter((item) => item.committed).length,
++    pushed: list.filter((item) => item.pushed).length,
++    skipped: list.filter((item) => item.skipped).length,
++    failed: list.filter((item) => item.failed).length
++  };
++}
++
++async function runCommits(paths, options = {}) {
++  const message = options.message || defaultCommitMessage();
++  const results = [];
++  for (const repoPath of paths) {
++    let result;
++    try {
++      result = await runCommit(repoPath, { message });
++    } catch (error) {
++      result = {
++        name: path.basename(repoPath),
++        path: repoPath,
++        branch: "",
++        remoteLabel: "",
++        message,
++        committed: false,
++        pushed: false,
++        skipped: false,
++        failed: true,
++        status: "failed",
++        detail: sanitizeGitOutput(error && error.message ? error.message : error),
++        commit: ""
++      };
++    }
++    results.push(result);
++    if (typeof options.onResult === "function") options.onResult(result);
++  }
++  return results;
++}
++
++module.exports = {
++  DEFAULT_MAX_DEPTH,
++  defaultCommitMessage,
++  formatTimestamp,
++  inspectRepo,
++  isLikelySecret,
++  isPathInside,
++  listDirectories,
++  normalizeUserPath,
++  parseStatus,
++  remoteLabel,
++  resolveDirectory,
++  runCommit,
++  runCommits,
++  samePath,
++  sanitizeGitOutput,
++  scanProjects,
++  skipReasonLabel,
++  summarize
++};
+diff --git a/commit-engine.js b/commit-engine.js
+index badd77f..805fe89 100644
+--- a/commit-engine.js
++++ b/commit-engine.js
+@@ -936,5 +936,28 @@ async function undoLastCommit(repoPath) {
+   }
+   return { ok: true };
+ }
++
++module.exports = {
++  DEFAULT_MAX_DEPTH,
++  defaultCommitMessage,
++  formatTimestamp,
++  inspectRepo,
++  isLikelySecret,
++  isPathInside,
++  listDirectories,
++  normalizeCommitMessage,
++  normalizeUserPath,
++  parseStatus,
++  remoteLabel,
++  resolveDirectory,
++  runCommit,
++  runCommits,
++  runGit,
++  samePath,
++  sanitizeGitOutput,
++  scanProjects,
++  skipReasonLabel,
++  summarize,
+   undoLastCommit
+ };
++
+diff --git a/index.html b/index.html
+index f642117..1582080 100644
+--- a/index.html
++++ b/index.html
+@@ -227,6 +227,140 @@
+     .sync-sweep {
+       animation: sweep-line 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+     }
++
++    /* Commit Now: progress button */
++    #btn-commit-run {
++      position: relative;
++      display: inline-flex;
++      align-items: center;
++      justify-content: center;
++      gap: 0.35rem;
++      min-width: 10.75rem;
++      overflow: hidden;
++      isolation: isolate;
++      transition: background-color 0.22s ease, color 0.22s ease, transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s ease;
++    }
++    #btn-commit-run:active:not(:disabled) {
++      transform: scale(0.975);
++    }
++    #btn-commit-run[data-commit-run-state="running"]:disabled {
++      opacity: 1;
++      cursor: progress;
++    }
++    #btn-commit-run[data-commit-run-state="running"]:hover {
++      background-color: var(--c-primary);
++    }
++    #btn-commit-run .commit-run-label {
++      position: relative;
++      z-index: 1;
++      white-space: nowrap;
++    }
++    #btn-commit-run .commit-run-label.is-swapping {
++      animation: commit-label-swap 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
++    }
++    @keyframes commit-label-swap {
++      0% { opacity: 0.15; transform: translateY(3px); }
++      100% { opacity: 1; transform: translateY(0); }
++    }
++    #btn-commit-run .commit-run-check {
++      width: 0;
++      overflow: hidden;
++      opacity: 0;
++      font-size: 14px;
++      line-height: 1;
++      transform: scale(0.55) rotate(-18deg);
++      transition: width 0.24s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.18s ease, transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
++    }
++    #btn-commit-run[data-commit-run-state="success"] .commit-run-check {
++      width: 14px;
++      opacity: 1;
++      transform: scale(1) rotate(0);
++    }
++    #btn-commit-run .commit-run-rail {
++      position: absolute;
++      left: 0;
++      right: 0;
++      bottom: 0;
++      height: 2px;
++      z-index: 2;
++      opacity: 0;
++      transform: scaleX(0.82);
++      transform-origin: left;
++      transition: opacity 0.18s ease, transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
++    }
++    #btn-commit-run[data-commit-run-state="running"] .commit-run-rail,
++    #btn-commit-run[data-commit-run-state="success"] .commit-run-rail {
++      opacity: 1;
++      transform: scaleX(1);
++    }
++    #btn-commit-run .commit-run-rail::before {
++      content: "";
++      position: absolute;
++      inset: 0;
++      background: currentColor;
++      opacity: 0.18;
++    }
++    #btn-commit-run .commit-run-fill {
++      position: absolute;
++      inset: 0 auto 0 0;
++      width: var(--commit-progress, 0%);
++      z-index: 1;
++      background: var(--c-secondary);
++      transition: width 0.56s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.24s ease;
++    }
++    #btn-commit-run .commit-run-fill::after {
++      content: "";
++      position: absolute;
++      right: -2px;
++      top: -1px;
++      width: 4px;
++      height: 4px;
++      border-radius: 999px;
++      background: var(--c-surface);
++      box-shadow: 0 0 8px var(--c-secondary);
++      opacity: 0;
++      transition: opacity 0.16s ease;
++    }
++    #btn-commit-run[data-commit-run-state="running"] .commit-run-fill::after {
++      opacity: 1;
++    }
++    #btn-commit-run .commit-run-rail::after {
++      content: "";
++      position: absolute;
++      top: 0;
++      bottom: 0;
++      width: 34%;
++      z-index: 3;
++      background: linear-gradient(90deg, transparent, var(--c-surface), transparent);
++      opacity: 0;
++    }
++    #btn-commit-run[data-commit-run-state="running"] .commit-run-rail::after {
++      animation: commit-run-glint 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
++    }
++    @keyframes commit-run-glint {
++      0% { transform: translateX(-140%); opacity: 0; }
++      18% { opacity: 0.55; }
++      82% { opacity: 0.55; }
++      100% { transform: translateX(390%); opacity: 0; }
++    }
++    #btn-commit-run[data-commit-run-state="success"] {
++      background-color: #2E7D6B;
++      color: #fff;
++      animation: commit-success-glow 0.72s cubic-bezier(0.16, 1, 0.3, 1) 1;
++    }
++    #btn-commit-run[data-commit-run-state="success"]:hover {
++      background-color: #256A5A;
++    }
++    #btn-commit-run[data-commit-run-state="success"] .commit-run-fill {
++      background: #fff;
++    }
++    #btn-commit-run[data-commit-run-state="success"] .commit-run-fill::after {
++      opacity: 0;
++    }
++    @keyframes commit-success-glow {
++      0% { box-shadow: 0 0 0 0 rgba(46, 125, 107, 0.34); }
++      100% { box-shadow: 0 0 0 10px rgba(46, 125, 107, 0); }
++    }
+     .tabular-nums {
+       font-variant-numeric: tabular-nums;
+     }
+@@ -968,6 +1102,34 @@
+             </div>
+           </div>
+         </div>
++
++        <!-- PRODUCTIVITY CLOCK -->
++        <div class="mt-10 pt-6 border-t border-outline-variant/40">
++          <div class="mb-6">
++            <h3 class="font-label-mono-bold text-label-mono-bold uppercase tracking-widest text-on-surface mb-1">Productivity Clock</h3>
++            <p class="font-body-sm text-body-sm text-on-surface-variant">Your coding rhythm across 24 hours — generated from commit telemetry</p>
++          </div>
++          <div class="flex flex-col xl:flex-row gap-6">
++            <!-- Radial Clock SVG -->
++            <div class="flex-1 border border-outline-variant/60 p-6 flex flex-col items-center">
++              <div class="font-label-mono text-[10px] uppercase tracking-wider text-on-surface-variant mb-4">24-Hour Activity Radial</div>
++              <div class="w-full flex justify-center">
++                <svg id="radial-clock-svg" viewBox="0 0 300 300" class="w-full max-w-[280px] h-auto"></svg>
++              </div>
++              <div class="flex justify-between w-full max-w-[280px] mt-3 font-label-mono text-[9px] text-on-surface-variant">
++                <span>00h</span><span>06h</span><span>12h</span><span>18h</span><span>24h</span>
++              </div>
++            </div>
++            <!-- Hourly Bar Chart -->
++            <div class="flex-1 border border-outline-variant/60 p-6">
++              <div class="font-label-mono text-[10px] uppercase tracking-wider text-on-surface-variant mb-4">Hourly Commit Frequency</div>
++              <div class="flex items-end justify-between gap-1 h-40" id="hourly-bars-container"></div>
++              <div class="flex justify-between mt-2 font-label-mono text-[9px] text-on-surface-variant">
++                <span>00</span><span>04</span><span>08</span><span>12</span><span>16</span><span>20</span><span>24</span>
++              </div>
++            </div>
++          </div>
++        </div>
+       </section>
+ 
+       <!-- =========================================================================
+@@ -1496,7 +1658,10 @@
+             <div class="flex gap-2">
+               <input class="flex-1 bg-surface border border-outline-variant/70 px-2.5 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="commit-message-input" type="text" placeholder="chore: checkpoint ..."/>
+               <button class="border border-outline-variant/70 px-2.5 py-1.5 font-label-mono text-[9px] uppercase hover:border-primary hover:text-on-surface transition-colors whitespace-nowrap bg-surface" id="btn-commit-timestamp" type="button">Timestamp</button>
++              <button class="border border-secondary/70 px-2.5 py-1.5 font-label-mono text-[9px] uppercase hover:bg-secondary hover:text-surface transition-colors whitespace-nowrap bg-surface disabled:opacity-40 disabled:cursor-not-allowed" disabled id="btn-commit-ai-suggest" type="button">AI Suggest &#10024;</button>
+             </div>
++            <div aria-live="polite" class="hidden mt-2 space-y-1.5" id="commit-ai-suggestions"></div>
++            <div class="mt-1.5 font-label-mono text-[9px] text-on-surface-variant" id="commit-ai-status">&#9679; Checking local AI&hellip;</div>
+           </div>
+           <div>
+             <label class="block font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant mb-1">Execution Mode</label>
+@@ -1564,17 +1729,116 @@
+           <div class="font-label-mono text-[10px] text-on-surface-variant" id="commit-preview-summary">—</div>
+           <div class="flex items-center gap-2">
+             <button class="border border-outline-variant/70 px-3 py-1.5 font-label-mono text-[10px] uppercase hover:border-secondary hover:text-secondary transition-colors" id="btn-commit-close-preview" type="button">Close</button>
+-            <button class="bg-primary text-surface hover:bg-secondary px-4 py-1.5 font-label-mono text-[10px] uppercase font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled id="btn-commit-run" type="button">Commit &amp; push</button>
++            <button aria-busy="false" class="bg-primary text-surface hover:bg-secondary px-4 py-1.5 font-label-mono text-[10px] uppercase font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled id="btn-commit-run" type="button">
++              <span aria-live="polite" class="commit-run-label" id="commit-run-label">Commit &amp; push</span>
++              <span aria-hidden="true" class="material-symbols-outlined commit-run-check">check</span>
++              <span aria-hidden="true" class="commit-run-rail"><span class="commit-run-fill" id="commit-run-fill"></span></span>
++            </button>
+           </div>
+         </div>
+ 
+-        <div class="mt-3 font-label-mono text-[9px] text-on-surface-variant leading-relaxed">
++                <div class="mt-3 font-label-mono text-[9px] text-on-surface-variant leading-relaxed">
+           PUSHES USE YOUR MACHINE'S GIT CREDENTIALS / SSH · LOGBOOK'S GITHUB TOKEN IS NEVER USED FOR WRITES · FAILED PUSHES LEAVE THE LOCAL COMMIT IN PLACE
+         </div>
+       </div>
+     </div>
+   </div>
+ 
++  <!-- 7. RELEASE NOTES / AI DIGEST GENERATOR MODAL -->
++  <div aria-hidden="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-16 px-4 pb-6 overflow-y-auto" id="release-notes-modal" role="dialog">
++    <div class="w-full max-w-3xl bg-surface border-2 border-primary text-on-surface p-5 max-h-[90vh] overflow-y-auto">
++      <div class="flex items-center justify-between gap-3 pb-3 border-b border-outline-variant/50 mb-4">
++        <div class="flex items-center space-x-2 min-w-0">
++          <span class="w-2 h-2 bg-secondary shrink-0"></span>
++          <span class="font-label-mono-bold uppercase tracking-widest truncate">RELEASE NOTES & ENGINEERING DIGEST</span>
++        </div>
++        <div class="flex items-center gap-3 shrink-0">
++          <button class="border border-outline-variant/70 px-3 py-1.5 font-label-mono text-[10px] uppercase hover:border-secondary hover:text-secondary transition-colors" id="btn-release-notes-copy" type="button">Copy Markdown</button>
++          <button class="font-label-mono text-label-mono hover:text-secondary" id="btn-close-release-notes" type="button">[x]</button>
++        </div>
++      </div>
++
++      <div class="grid md:grid-cols-2 gap-3 mb-4 bg-surface-container-low p-3 border border-outline-variant/60">
++        <div>
++          <label class="block font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant mb-1">Digest Title</label>
++          <input class="w-full bg-surface border border-outline-variant/70 px-2.5 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="release-title-input" type="text" value="Engineering Release Notes & Digest"/>
++        </div>
++        <div>
++          <label class="block font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant mb-1">Format Style</label>
++          <select class="w-full bg-surface border border-outline-variant/70 px-2.5 py-1.5 font-mono-data text-body-sm text-on-surface focus:outline-none focus:border-secondary" id="release-format-select">
++            <option value="markdown">📄 Markdown Release Notes</option>
++            <option value="digest">📊 Weekly Engineering Digest</option>
++            <option value="summary">📋 Executive Summary</option>
++          </select>
++        </div>
++      </div>
++
++      <div class="flex items-center gap-2 mb-3">
++        <button class="bg-primary text-surface hover:bg-secondary px-4 py-2 font-label-mono text-[10px] uppercase font-semibold transition-colors" id="btn-generate-release" type="button">
++          <span class="flex items-center gap-2">
++            <span class="material-symbols-outlined text-[14px]">auto_awesome</span>
++            Generate Digest
++          </span>
++        </button>
++        <span class="font-label-mono text-[10px] text-on-surface-variant" id="release-status">Ready. Analyze your commit history.</span>
++      </div>
++
++      <div class="border border-outline-variant/60 bg-surface-lowest">
++        <div class="flex items-center justify-between px-3 py-2 border-b border-outline-variant/50">
++          <span class="font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">Generated Markdown Preview</span>
++          <span class="font-label-mono text-[9px] text-secondary" id="release-char-count"></span>
++        </div>
++        <div class="p-4 max-h-[24rem] overflow-y-auto font-mono-data text-[11px] leading-relaxed text-on-surface whitespace-pre-wrap" id="release-notes-preview">Generate a digest to preview your release notes here.</div>
++      </div>
++    </div>
++  </div>
++
++  <!-- 8. DEPENDENCY RADAR / HYGIENE MODAL -->
++  <div aria-hidden="true" class="hidden fixed inset-0 z-[100] bg-on-surface/40 flex items-start justify-center pt-16 px-4 pb-6 overflow-y-auto" id="radar-modal" role="dialog">
++    <div class="w-full max-w-4xl bg-surface border-2 border-primary text-on-surface p-5 max-h-[90vh] overflow-y-auto">
++      <div class="flex items-center justify-between gap-3 pb-3 border-b border-outline-variant/50 mb-4">
++        <div class="flex items-center space-x-2 min-w-0">
++          <span class="w-2 h-2 bg-secondary shrink-0"></span>
++          <span class="font-label-mono-bold uppercase tracking-widest truncate">DEPENDENCY & HYGIENE RADAR</span>
++        </div>
++        <button class="font-label-mono text-label-mono hover:text-secondary" id="btn-close-radar" type="button">[x]</button>
++      </div>
++
++      <p class="font-body-sm text-body-sm text-on-surface-variant mb-4">Scans your local projects for dependency manifests, missing documentation, and repository hygiene issues.</p>
++
++      <div class="flex gap-2 mb-4">
++        <button class="bg-primary text-surface hover:bg-secondary px-4 py-2 font-label-mono text-[10px] uppercase font-semibold transition-colors" id="btn-run-radar" type="button">
++          <span class="flex items-center gap-2">
++            <span class="material-symbols-outlined text-[14px]">radar</span>
++            Scan Workspace
++          </span>
++        </button>
++        <button class="border border-outline-variant/70 px-3 py-1.5 font-label-mono text-[10px] uppercase hover:border-secondary hover:text-secondary transition-colors" id="btn-change-radar-folder" type="button">Change Folder</button>
++        <span class="font-label-mono text-[10px] text-on-surface-variant flex items-center" id="radar-folder-label">—</span>
++      </div>
++
++      <div class="border border-outline-variant/60">
++        <table class="w-full font-mono-data text-[11px]">
++          <thead>
++            <tr class="border-b border-outline-variant/60 font-label-mono text-[9px] uppercase tracking-wider text-on-surface-variant">
++              <th class="text-left px-3 py-2">Repository</th>
++              <th class="text-center px-3 py-2">README</th>
++              <th class="text-center px-3 py-2">LICENSE</th>
++              <th class="text-center px-3 py-2">.gitignore</th>
++              <th class="text-center px-3 py-2">CI/CD</th>
++              <th class="text-left px-3 py-2">Manifests</th>
++              <th class="text-right px-3 py-2">Dependencies</th>
++            </tr>
++          </thead>
++          <tbody class="divide-y divide-outline-variant/30" id="radar-results-body">
++            <tr><td class="px-3 py-3 text-on-surface-variant" colspan="7">Choose a folder and scan to see results.</td></tr>
++          </tbody>
++        </table>
++      </div>
++      <div class="mt-3 font-label-mono text-[9px] text-on-surface-variant">Scans package.json, requirements.txt, Cargo.toml, go.mod, and checks for LICENSE, README, .gitignore, and CI/CD workflows.</div>
++    </div>
++  </div>
++
+   <!-- ARCHIVAL TOAST NOTIFICATION -->
+   <div class="fixed bottom-5 right-5 z-[110] bg-primary text-surface border border-secondary px-4 py-2.5 font-label-mono text-label-mono uppercase tracking-wider pointer-events-none opacity-0 translate-y-2 transition-all duration-200 flex items-center space-x-2" id="archival-toast">
+     <span class="w-2 h-2 bg-secondary shrink-0"></span>
+@@ -1629,6 +1893,23 @@
+       var ctx = getAudioCtx();
+       if (!ctx) return;
+       var now = ctx.currentTime;
++      if (type === "success") {
++        [523.25, 659.25, 783.99].forEach(function (frequency, index) {
++          var noteAt = now + index * 0.085;
++          var noteOsc = ctx.createOscillator();
++          var noteGain = ctx.createGain();
++          noteOsc.type = index === 2 ? "triangle" : "sine";
++          noteOsc.frequency.setValueAtTime(frequency, noteAt);
++          noteGain.gain.setValueAtTime(0.0001, noteAt);
++          noteGain.gain.exponentialRampToValueAtTime(0.042, noteAt + 0.015);
++          noteGain.gain.exponentialRampToValueAtTime(0.0001, noteAt + 0.34);
++          noteOsc.connect(noteGain);
++          noteGain.connect(ctx.destination);
++          noteOsc.start(noteAt);
++          noteOsc.stop(noteAt + 0.36);
++        });
++        return;
++      }
+       var osc = ctx.createOscillator();
+       var gain = ctx.createGain();
+       osc.connect(gain);
+@@ -1806,10 +2087,21 @@
+       done: false,
+       results: [],
+       runMessage: "",
++      runTotal: 0,
++      successTimer: null,
+       summary: null,
+       error: "",
+       selectedPaths: {},
+-      expandedPaths: {}
++      expandedPaths: {},
++      ai: {
++        loading: false,
++        suggestions: [],
++        provider: "",
++        model: "",
++        offline: true,
++        statusLoaded: false,
++        error: ""
++      }
+     }
+   };
+ 
+@@ -4756,7 +5048,7 @@
+     if (el) el.scrollIntoView({ behavior: "smooth" });
+   }
+ 
+-  var MODAL_IDS = ["cmd-palette-modal", "profile-modal", "shortcuts-modal", "session-modal", "glossary-modal", "commit-modal"];
++  var MODAL_IDS = ["cmd-palette-modal", "profile-modal", "shortcuts-modal", "session-modal", "glossary-modal", "commit-modal", "release-notes-modal", "radar-modal"];
+ 
+   function visibleModal() {
+     for (var i = MODAL_IDS.length - 1; i >= 0; i--) {
+@@ -4999,6 +5291,10 @@
+     state.commit.summary = null;
+     state.commit.done = false;
+     state.commit.runMessage = "";
++    state.commit.ai.suggestions = [];
++    state.commit.ai.error = "";
++    renderCommitAi();
++    if (!state.commit.ai.statusLoaded) refreshCommitAiStatus();
+     if (state.commit.root) {
+       showCommitPreviewView();
+       scanCommitRoot(state.commit.root);
+@@ -5119,6 +5415,8 @@
+     state.commit.results = [];
+     state.commit.summary = null;
+     state.commit.runMessage = "";
++    state.commit.ai.suggestions = [];
++    state.commit.ai.error = "";
+     renderCommitPreview();
+     try {
+       var data = await apiJson("/commit/scan", {
+@@ -5146,6 +5444,117 @@
+     }
+   }
+ 
++  function commitAiProviderLabel(provider) {
++    if (provider === "ollama") return "Ollama";
++    if (provider === "lm-studio") return "LM Studio";
++    if (provider === "omniroute") return "OmniRoute";
++    if (provider === "gemini") return "Gemini";
++    return "Rule engine";
++  }
++
++  function clearCommitAiSuggestions() {
++    state.commit.ai.suggestions = [];
++    state.commit.ai.error = "";
++  }
++
++  function chooseCommitAiSuggestion(index) {
++    var suggestion = state.commit.ai.suggestions[index];
++    if (!suggestion) return;
++    var input = document.getElementById("commit-message-input");
++    if (input) {
++      input.value = suggestion;
++      input.focus();
++      input.setSelectionRange(suggestion.length, suggestion.length);
++    }
++    playSound("tick");
++  }
++
++  function renderCommitAi() {
++    var ai = state.commit.ai;
++    var button = document.getElementById("btn-commit-ai-suggest");
++    var container = document.getElementById("commit-ai-suggestions");
++    var status = document.getElementById("commit-ai-status");
++    var selectedCount = Object.keys(state.commit.selectedPaths || {}).length;
++    if (button) {
++      button.disabled = ai.loading || state.commit.running || state.commit.scanLoading || !selectedCount;
++      button.textContent = ai.loading ? "Thinking\u2026" : "AI Suggest \u2728";
++    }
++    if (container) {
++      container.textContent = "";
++      if (ai.suggestions.length) {
++        container.classList.remove("hidden");
++        ai.suggestions.forEach(function (suggestion, index) {
++          var option = document.createElement("button");
++          option.type = "button";
++          option.className = "ai-suggestion-btn w-full text-left border border-outline-variant/70 bg-surface px-2.5 py-1.5 font-mono-data text-[11px] text-on-surface hover:border-secondary hover:bg-surface-container transition-colors";
++          option.textContent = "[" + (index + 1) + "] " + suggestion;
++          option.setAttribute("data-ai-index", String(index));
++          option.addEventListener("click", function () { chooseCommitAiSuggestion(index); });
++          container.appendChild(option);
++        });
++      } else {
++        container.classList.add("hidden");
++      }
++    }
++    if (status) {
++      if (ai.loading) {
++        status.textContent = "\u25CF Analyzing sanitized local changes\u2026";
++      } else if (ai.error) {
++        status.textContent = "\u25CF " + ai.error;
++      } else if (!ai.statusLoaded) {
++        status.textContent = "\u25CF Checking local AI\u2026";
++      } else if (ai.provider === "heuristic" || !ai.provider) {
++        status.textContent = "\u25CF Offline rule engine ready \u00B7 no model required";
++      } else {
++        var location = ai.offline ? "100% Offline" : "Cloud explicitly enabled";
++        status.textContent = "\u25CF " + (ai.offline ? "Local AI: " : "AI: ") + commitAiProviderLabel(ai.provider) + (ai.model ? " (" + ai.model + ")" : "") + " \u00B7 " + location;
++      }
++    }
++  }
++
++  async function refreshCommitAiStatus() {
++    try {
++      var data = await apiJson("/commit/ai-status");
++      state.commit.ai.provider = data.provider || "heuristic";
++      state.commit.ai.model = data.model || "";
++      state.commit.ai.offline = data.offline !== false;
++      state.commit.ai.statusLoaded = true;
++    } catch (e) {
++      state.commit.ai.provider = "heuristic";
++      state.commit.ai.model = "";
++      state.commit.ai.offline = true;
++      state.commit.ai.statusLoaded = true;
++    }
++    renderCommitAi();
++  }
++
++  async function requestCommitAiSuggestions() {
++    if (state.commit.ai.loading) return;
++    var paths = Object.values(state.commit.selectedPaths).filter(function (value) { return typeof value === "string" && value; });
++    if (!paths.length) return;
++    state.commit.ai.loading = true;
++    state.commit.ai.error = "";
++    state.commit.ai.suggestions = [];
++    renderCommitAi();
++    try {
++      var data = await apiJson("/commit/suggest", {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ root: state.commit.root, paths: paths })
++      });
++      state.commit.ai.suggestions = Array.isArray(data.suggestions) ? data.suggestions.slice(0, 3) : [];
++      state.commit.ai.provider = data.provider || "heuristic";
++      state.commit.ai.model = data.model || "";
++      state.commit.ai.offline = data.offline !== false;
++      state.commit.ai.statusLoaded = true;
++      if (!state.commit.ai.suggestions.length) state.commit.ai.error = "No valid suggestions returned";
++    } catch (e) {
++      state.commit.ai.error = commitErrorLabel(e);
++    }
++    state.commit.ai.loading = false;
++    renderCommitAi();
++  }
++
+   function commitPreviewState(repo, result) {
+     if (result) {
+       var tones = {
+@@ -5188,6 +5597,7 @@
+   }
+ 
+   function renderCommitPreview() {
++    renderCommitAi();
+     var rootLabel = document.getElementById("commit-root-label");
+     var status = document.getElementById("commit-scan-status");
+     var body = document.getElementById("commit-preview-body");
+@@ -5329,6 +5739,7 @@
+           var p = orig.toLowerCase();
+           if (chk.checked) state.commit.selectedPaths[p] = orig;
+           else delete state.commit.selectedPaths[p];
++          clearCommitAiSuggestions();
+           renderCommitPreview();
+         });
+       });
+@@ -5526,7 +5937,10 @@ function commandItems() {
+       { label: "Export repositories CSV", category: "EXPORT", action: function () { exportRepos("csv"); } },
+       { label: "Export repositories JSON", category: "EXPORT", action: function () { exportRepos("json"); } },
+       { label: "Start Kiosk Presentation Mode (auto-rotating sections)", category: "PRESENTATION", action: function () { toggleKioskMode(); } },
+-      { label: "Toggle Portfolio Mode (curated public archive view)", category: "PRESENTATION", action: function () { togglePortfolioMode(); } }
++      { label: "Toggle Portfolio Mode (curated public archive view)", category: "PRESENTATION", action: function () { togglePortfolioMode(); } },
++      { label: "Generate Release Notes / Weekly Engineering Digest", category: "AI", action: function () { openModal("release-notes-modal"); } },
++      { label: "Open Dependency & Hygiene Radar", category: "RADAR", action: function () { openModal("radar-modal"); } },
++      { label: "Stash all working trees across workspace", category: "GIT OPS", action: function () { stashAllRepos(); } }
+     ];
+     if (state.authProbe && state.authProbe.features && state.authProbe.features.commitNow) {
+       items.push({ label: "Commit local changes to GitHub", category: "COMMIT", action: function () { openCommitModal(); } });
+@@ -5541,7 +5955,147 @@ function commandItems() {
+     return items;
+   }
+ 
+-  function renderCommandResults(query) {
++  
++  async function generateAndDisplayReleaseNotes() {
++    var title = document.getElementById("release-title-input") && document.getElementById("release-title-input").value || "Engineering Release Notes & Digest";
++    var status = document.getElementById("release-status");
++    var preview = document.getElementById("release-notes-preview");
++    var charCount = document.getElementById("release-char-count");
++    if (status) status.textContent = "Generating digest from GitHub telemetry…";
++    if (preview) preview.textContent = "Analyzing commits and synthesizing release notes…";
++    playSound("relay");
++    try {
++      var res = await apiJson("/release-notes", {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ title: title })
++      });
++      if (!res || !res.markdown) throw new Error("No markdown returned");
++      if (preview) { preview.textContent = res.markdown; preview.scrollTop = 0; }
++      if (charCount) charCount.textContent = (res.markdown.length || 0) + " chars";
++      var totalGroups = (res.grouped && res.grouped.features ? res.grouped.features.length : 0)
++                     + (res.grouped && res.grouped.fixes ? res.grouped.fixes.length : 0)
++                     + (res.grouped && res.grouped.refactoring ? res.grouped.refactoring.length : 0)
++                     + (res.grouped && res.grouped.documentation ? res.grouped.documentation.length : 0)
++                     + (res.grouped && res.grouped.chores ? res.grouped.chores.length : 0);
++      if (status) status.textContent = "Digest generated. " + totalGroups + " commits analyzed across all repositories.";
++      showToast("RELEASE NOTES GENERATED");
++    } catch (e) {
++      if (status) status.textContent = "Failed: " + (e.message || String(e));
++      if (preview) preview.textContent = "Could not generate release notes. Ensure your GitHub data is loaded (public token or OAuth session).";
++      showToast("RELEASE NOTES FAILED");
++    }
++  }
++
++  async function runRadarScan() {
++    var root = (state.commit && state.commit.root) || "";
++    if (!root) { showToast("SELECT A PROJECTS FOLDER FIRST IN COMMIT NOW"); return; }
++    var label = document.getElementById("radar-folder-label");
++    var body = document.getElementById("radar-results-body");
++    if (label) label.textContent = root;
++    if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="7">Scanning repositories…</td></tr>';
++    playSound("relay");
++    try {
++      var data = await apiJson("/dependencies/scan", {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ root: root })
++      });
++      if (!data || !Array.isArray(data.repos)) throw new Error("Invalid response from server.");
++      var rows = data.repos.map(function(r) {
++        var chk = function(ok) { return ok ? '<span class="text-[#2E7D6B] font-bold">&#10003;</span>' : '<span class="text-secondary font-bold">&#10005;</span>'; };
++        var mfs = (r.manifests && r.manifests.length) ? r.manifests.join(", ") : "&#8212;";
++        return '<tr class="hover:bg-surface-container/30 transition-colors">' +
++          '<td class="px-3 py-2"><div class="font-medium truncate max-w-[14rem]" title="' + escapeHtml(r.path) + '">' + escapeHtml(r.name) + '</div></td>' +
++          '<td class="px-3 py-2 text-center">' + chk(r.hasReadme) + '</td>' +
++          '<td class="px-3 py-2 text-center">' + chk(r.hasLicense) + '</td>' +
++          '<td class="px-3 py-2 text-center">' + chk(r.hasGitignore) + '</td>' +
++          '<td class="px-3 py-2 text-center">' + chk(r.hasWorkflow) + '</td>' +
++          '<td class="px-3 py-2 text-[10px] text-on-surface-variant">' + escapeHtml(mfs) + '</td>' +
++          '<td class="px-3 py-2 text-right tabular-nums font-bold">' + (r.dependenciesCount || 0) + '</td>' +
++          '</tr>';
++      }).join("");
++      if (body) body.innerHTML = rows || '<tr><td class="px-3 py-3 text-on-surface-variant" colspan="7">No projects found in this folder.</td></tr>';
++      showToast("RADAR COMPLETE · " + (data.repos && data.repos.length || 0) + " REPOSITORIES SCANNED");
++    } catch (e) {
++      if (body) body.innerHTML = '<tr><td class="px-3 py-3 text-secondary" colspan="7">' + escapeHtml(e.message || "Scan failed") + '</td></tr>';
++      showToast("RADAR SCAN FAILED");
++    }
++  }
++
++  function renderProductivityClock() {
++    var commits = typeof COMMITS !== "undefined" && Array.isArray(COMMITS) ? COMMITS : [];
++    var hourlyCounts = new Array(24).fill(0);
++    commits.forEach(function(c) {
++      try {
++        var d = c.date instanceof Date ? c.date : new Date(c.iso || c.date);
++        if (isNaN(d.getTime())) return;
++        var h = d.getHours();
++        if (h >= 0 && h < 24) hourlyCounts[h] = (hourlyCounts[h] || 0) + 1;
++      } catch(e) {}
++    });
++    var maxHourly = Math.max.apply(null, hourlyCounts.filter(function(n) { return n > 0; })) || 1;
++
++    // SVG Radial Clock
++    var svg = document.getElementById("radial-clock-svg");
++    if (svg) {
++      var cx = 150, cy = 150, r0 = 30, r1 = 120;
++      var parts = hourlyCounts.map(function(count, h) {
++        var pct = count / maxHourly;
++        var a0 = (h / 24) * 2 * Math.PI - Math.PI / 2;
++        var a1 = ((h + 1) / 24) * 2 * Math.PI - Math.PI / 2;
++        var col = pct > 0.5 ? "var(--c-secondary)" : (pct > 0.2 ? "var(--c-on-surface)" : "var(--c-outline-variant)");
++        var x0 = cx + r0 * Math.cos(a0), y0 = cy + r0 * Math.sin(a0);
++        var x1 = cx + r1 * Math.cos(a0), y1 = cy + r1 * Math.sin(a0);
++        var x2 = cx + r1 * Math.cos(a1), y2 = cy + r1 * Math.sin(a1);
++        var x3 = cx + r0 * Math.cos(a1), y3 = cy + r0 * Math.sin(a1);
++        var large = (a1 - a0) > Math.PI ? 1 : 0;
++        return '<path d="M' + x0.toFixed(1) + ',' + y0.toFixed(1) + ' L' + x1.toFixed(1) + ',' + y1.toFixed(1) + ' A' + r1 + ',' + r1 + ' 0 ' + large + ' 1 ' + x2.toFixed(1) + ',' + y2.toFixed(1) + ' L' + x3.toFixed(1) + ',' + y3.toFixed(1) + ' A' + r0 + ',' + r0 + ' 0 ' + large + ' 0 ' + x0.toFixed(1) + ',' + y0.toFixed(1) + ' Z" fill="' + col + '" opacity="0.75"/>';
++      });
++      var labels = [0,6,12,18,24].map(function(h) {
++        var a = (h / 24) * 2 * Math.PI - Math.PI / 2;
++        var lx = cx + (r1 + 16) * Math.cos(a), ly = cy + (r1 + 16) * Math.sin(a);
++        return '<text x="' + lx.toFixed(1) + '" y="' + ly.toFixed(1) + '" text-anchor="middle" dominant-baseline="central" font-family="JetBrains Mono,monospace" font-size="9" fill="var(--c-on-surface-variant)">' + h + '</text>';
++      });
++      svg.innerHTML = '<circle cx="' + cx + '" cy="' + cy + '" r="130" fill="var(--c-surface-high)" stroke="var(--c-outline-variant)" stroke-width="1"/><circle cx="' + cx + '" cy="' + cy + '" r="28" fill="var(--c-surface)" stroke="var(--c-outline-variant)" stroke-width="1"/>' + parts.join("") + labels.join("");
++    }
++
++    // Hourly bar chart
++    var barContainer = document.getElementById("hourly-bars-container");
++    if (barContainer) {
++      barContainer.innerHTML = hourlyCounts.map(function(count, h) {
++        var pct = count / maxHourly;
++        var col = pct > 0.5 ? "var(--c-secondary)" : (pct > 0.2 ? "var(--c-on-surface)" : "var(--c-outline-variant)");
++        var barH = Math.max(2, Math.round(pct * 100));
++        return '<div class="flex-1 flex flex-col items-center justify-end gap-0.5 cursor-default group relative" title="' + h + ':00 &#8212; ' + count + ' commits">' +
++          '<div class="w-full bar-anim group-hover:bg-secondary transition-colors" style="height:' + barH + '%;background-color:' + col + ';min-height:2px;"></div>' +
++          '</div>';
++      }).join("");
++    }
++  }
++
++  async function stashAllRepos() {
++    var paths = [];
++    if (state.commit && state.commit.scan && state.commit.scan.repos) {
++      state.commit.scan.repos.forEach(function(r) {
++        if (r.path) paths.push(r.path);
++      });
++    }
++    if (!paths.length) { showToast("SCAN REPOSITORIES FIRST"); return; }
++    playSound("relay");
++    try {
++      var res = await apiJson("/commit/stash", {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ paths: paths })
++      });
++      var stashed = (res.results || []).filter(function(r) { return r.ok; }).length;
++      showToast("STASHED " + stashed + " REPOSITORIES");
++    } catch(e) {
++      showToast("STASH FAILED");
++    }
++  }
++function renderCommandResults(query) {
+     var q = (query || "").trim().toLowerCase();
+     var listEl = document.getElementById("cmd-results-list");
+     var items = commandItems();
+@@ -5879,6 +6433,7 @@ function commandItems() {
+     hydrate(payload);
+     if (initial || !previous || !meta.sections) {
+       bootRender();
++    setTimeout(function () { renderProductivityClock(); }, 300);
+       return true;
+     }
+     var changed = function (name) { return previous[name] !== meta.sections[name]; };
+@@ -6308,12 +6863,14 @@ function commandItems() {
+       showToast("AUDIO " + (soundEnabled ? "ON" : "MUTED"));
+     });
+     document.getElementById("btn-commit-now").addEventListener("click", function () { openCommitModal(); });
++    document.getElementById("btn-commit-ai-suggest").addEventListener("click", function () { requestCommitAiSuggestions(); });
+     document.getElementById("btn-commit-select-all").addEventListener("click", function () {
+       if (!state.commit.scan || !state.commit.scan.repos) return;
+       state.commit.selectedPaths = {};
+       state.commit.scan.repos.forEach(function (r) {
+         if (r.actionable && !(r.secrets || []).length) state.commit.selectedPaths[r.path.toLowerCase()] = r.path;
+       });
++      clearCommitAiSuggestions();
+       renderCommitPreview();
+     });
+     document.getElementById("btn-commit-deselect-clean").addEventListener("click", function () {
+@@ -6322,6 +6879,7 @@ function commandItems() {
+       state.commit.scan.repos.forEach(function (r) {
+         if (r.actionable && r.changed) state.commit.selectedPaths[r.path.toLowerCase()] = r.path;
+       });
++      clearCommitAiSuggestions();
+       renderCommitPreview();
+     });
+     document.getElementById("btn-commit-deselect-sensitive").addEventListener("click", function () {
+@@ -6329,6 +6887,7 @@ function commandItems() {
+       state.commit.scan.repos.forEach(function (r) {
+         if (r.secrets && r.secrets.length) delete state.commit.selectedPaths[r.path.toLowerCase()];
+       });
++      clearCommitAiSuggestions();
+       renderCommitPreview();
+     });
+     document.getElementById("commit-check-all").addEventListener("change", function () {
+@@ -6340,6 +6899,7 @@ function commandItems() {
+           if (r.actionable && !(r.secrets || []).length) state.commit.selectedPaths[r.path.toLowerCase()] = r.path;
+         });
+       }
++      clearCommitAiSuggestions();
+       renderCommitPreview();
+     });
+     document.getElementById("commit-mode-select").addEventListener("change", function () {
+@@ -6380,6 +6940,20 @@ function commandItems() {
+       if (state.commit.root) scanCommitRoot(state.commit.root);
+     });
+     document.getElementById("btn-commit-run").addEventListener("click", function () { runCommitNow(); });
++    document.getElementById("btn-generate-release").addEventListener("click", function () { generateAndDisplayReleaseNotes(); });
++    document.getElementById("btn-release-notes-copy").addEventListener("click", function () {
++      var preview = document.getElementById("release-notes-preview");
++      if (preview && preview.textContent) {
++        navigator.clipboard.writeText(preview.textContent).then(function() { showToast("MARKDOWN COPIED TO CLIPBOARD"); }).catch(function() {});
++      }
++    });
++    document.getElementById("btn-close-release-notes").addEventListener("click", closeAllModals);
++    document.getElementById("btn-run-radar").addEventListener("click", function () { runRadarScan(); });
++    document.getElementById("btn-change-radar-folder").addEventListener("click", function () {
++      openModal("commit-modal");
++      closeAllModals("radar-modal");
++    });
++    document.getElementById("btn-close-radar").addEventListener("click", closeAllModals);
+     document.getElementById("btn-cmd-palette").addEventListener("click", function () { openModal("cmd-palette-modal"); });
+     document.getElementById("btn-close-cmd").addEventListener("click", closeAllModals);
+     document.getElementById("cmd-input").addEventListener("input", function () { renderCommandResults(this.value); });
+@@ -6459,6 +7033,13 @@ function commandItems() {
+       if (e.key === "Escape") { if (state.kioskActive) toggleKioskMode(); closeAllModals(); return; }
+       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openModal("cmd-palette-modal"); return; }
+       if (e.key === "Escape") { closeAllModals(); if (state.globalRepoFilter) setGlobalRepoFilter(null); return; }
++      var commitModal = document.getElementById("commit-modal");
++      var aiSuggestions = document.getElementById("commit-ai-suggestions");
++      if (!e.metaKey && !e.ctrlKey && !e.altKey && ["1", "2", "3"].indexOf(e.key) !== -1 && commitModal && !commitModal.classList.contains("hidden") && aiSuggestions && !aiSuggestions.classList.contains("hidden")) {
++        e.preventDefault();
++        chooseCommitAiSuggestion(parseInt(e.key, 10) - 1);
++        return;
++      }
+       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+ 
+       if (e.key === "/") {
+diff --git a/server.js b/server.js
+index bb38787..91d70cc 100644
+--- a/server.js
++++ b/server.js
+@@ -23,6 +23,7 @@ const { SnapshotStore } = require("./snapshot-store");
+ const { SessionStore } = require("./session-store");
+ const { SyncEngine } = require("./sync-engine");
+ const commitEngine = require("./commit-engine");
++const commitAiEngine = require("./commit-ai-engine");
+ const releaseNotesEngine = require("./release-notes-engine");
+ const dependencyScanner = require("./dependency-scanner");
+ const {
+@@ -98,6 +99,7 @@ const exportLimiter = new RateLimiter({ windowMs: 60_000, max: 10 });
+ const commitBrowseLimiter = new RateLimiter({ windowMs: 60_000, max: 120 });
+ const commitScanLimiter = new RateLimiter({ windowMs: 60_000, max: 20 });
+ const commitRunLimiter = new RateLimiter({ windowMs: 60_000, max: 6 });
++const commitAiLimiter = new RateLimiter({ windowMs: 60_000, max: 20 });
+ 
+ /** @type {Map<string, {verifier:string, expectedLogin:string, returnTo:string, createdAt:number}>} */
+ const pendingOAuth = new Map();
+@@ -284,6 +286,38 @@ async function handle(req, res) {
+     return runCommitNow(req, res);
+   }
+ 
++  if (pathname === "/api/commit/suggest" && req.method === "POST") {
++    return suggestCommitMessage(req, res);
++  }
++
++  if (pathname === "/api/commit/ai-status" && req.method === "GET") {
++    return getCommitAiStatus(req, res);
++  }
++
++  if (pathname === "/api/commit/undo" && req.method === "POST") {
++    return undoCommitNow(req, res);
++  }
++
++  if (pathname === "/api/commit/stash" && req.method === "POST") {
++    return stashWorkspaceRepos(req, res);
++  }
++
++  if (pathname === "/api/release-notes" && req.method === "POST") {
++    return generateReleaseNotes(req, res);
++  }
++
++  if (pathname === "/api/dependencies/scan" && req.method === "POST") {
++    return scanWorkspaceDependencies(req, res);
++  }
++
++  if (pathname === "/api/backup/export" && req.method === "POST") {
++    return exportEncryptedBackup(req, res);
++  }
++
++  if (pathname === "/api/backup/import" && req.method === "POST") {
++    return importEncryptedBackup(req, res);
++  }
++
+   if (pathname === "/api/export" && req.method === "GET") {
+     return exportAccount(req, res);
+   }
+@@ -703,6 +737,83 @@ async function runCommitNow(req, res) {
+   }
+ }
+ 
++async function resolveSelectedCommitRepos(root, paths) {
++  const rootCheck = await commitEngine.resolveDirectory(root);
++  if (!rootCheck.ok) return { ok: false, rootCheck, selected: [] };
++  const selected = [];
++  for (const value of paths.slice(0, 200)) {
++    if (typeof value !== "string" || !path.isAbsolute(value)) continue;
++    let resolved;
++    try {
++      resolved = await fs.promises.realpath(path.resolve(value));
++    } catch (error) {
++      continue;
++    }
++    if (!commitEngine.isPathInside(rootCheck.path, resolved)) continue;
++    if (!fs.existsSync(path.join(resolved, ".git"))) continue;
++    if (selected.some((existing) => commitEngine.samePath(existing, resolved))) continue;
++    selected.push(resolved);
++  }
++  return { ok: selected.length > 0, rootCheck, selected };
++}
++
++async function suggestCommitMessage(req, res) {
++  const session = commitFeatureGuard(req, res, { csrf: true });
++  if (!session) return;
++  if (!commitRateGuard(req, res, commitAiLimiter, session)) return;
++  let body;
++  try {
++    body = await readJsonBody(req, res);
++  } catch (error) {
++    return sendJson(res, error.status || 400, { error: error.code || "bad_request" });
++  }
++  const root = body && body.root;
++  const paths = body && Array.isArray(body.paths) ? body.paths : [];
++  if (typeof root !== "string" || !root.trim() || !paths.length) {
++    return sendJson(res, 400, { error: "invalid_repos", message: "Select at least one repository before requesting suggestions." });
++  }
++  const resolved = await resolveSelectedCommitRepos(root, paths);
++  if (!resolved.rootCheck.ok) {
++    return sendJson(res, resolved.rootCheck.error === "not_found" ? 404 : 400, {
++      error: resolved.rootCheck.error,
++      message: commitErrorMessage(resolved.rootCheck.error)
++    });
++  }
++  if (!resolved.selected.length) {
++    return sendJson(res, 400, {
++      error: "no_valid_repos",
++      message: "None of the selected folders are Git repositories under that root."
++    });
++  }
++  try {
++    const result = await commitAiEngine.suggestCommitMessages(resolved.selected, {
++      allowCloud: process.env.ALLOW_CLOUD_AI === "1"
++    });
++    audit("commit_ai_suggest", session, {
++      req,
++      detail: JSON.stringify({ provider: result.provider, model: result.model || null, repositories: resolved.selected.length })
++    });
++    return sendJson(res, 200, {
++      ok: true,
++      provider: result.provider,
++      model: result.model,
++      offline: result.provider !== "gemini",
++      suggestions: result.suggestions
++    });
++  } catch (error) {
++    console.error("[logbook] commit suggestions failed:", error && error.message ? error.message : error);
++    return sendJson(res, 500, { error: "suggestion_failed", message: "Commit suggestions could not be generated." });
++  }
++}
++
++async function getCommitAiStatus(req, res) {
++  const session = commitFeatureGuard(req, res);
++  if (!session) return;
++  if (!commitRateGuard(req, res, commitAiLimiter, session)) return;
++  const status = await commitAiEngine.getLocalAiStatus({ timeoutMs: 1_200 });
++  return sendJson(res, 200, status);
++}
++
+ function exportAccount(req, res) {
+   const session = requireApi(req, res);
+   if (!session) return;
+@@ -1559,6 +1670,27 @@ async function importEncryptedBackup(req, res) {
+   return sendJson(res, 200, { ok: true });
+ }
+ 
++
++async function undoCommitNow(req, res) {
++  const session = commitFeatureGuard(req, res, { csrf: true });
++  if (!session) return;
++  let body;
++  try {
++    body = await readJsonBody(req, res);
++  } catch (e) {
++    body = {};
++  }
++  const repoPath = body && body.path;
++  if (typeof repoPath !== "string" || !path.isAbsolute(repoPath) || !fs.existsSync(path.join(repoPath, ".git"))) {
++    return sendJson(res, 400, { error: "invalid_path", message: "Valid repository path required." });
++  }
++  const result = await commitEngine.undoLastCommit(repoPath);
++  if (!result.ok) {
++    return sendJson(res, 400, { error: "undo_failed", message: result.error || "Undo operation failed." });
++  }
++  audit("commit_undo", session, { req, detail: repoPath });
++  return sendJson(res, 200, { ok: true, path: repoPath });
++}
+ async function stashWorkspaceRepos(req, res) {
+   const session = commitFeatureGuard(req, res, { csrf: true });
+   if (!session) return;
+diff --git a/test/commit-ai.test.js b/test/commit-ai.test.js
+new file mode 100644
+index 0000000..4b85ff4
+--- /dev/null
++++ b/test/commit-ai.test.js
+@@ -0,0 +1,153 @@
++"use strict";
++
++const test = require("node:test");
++const assert = require("node:assert/strict");
++const fs = require("fs");
++const os = require("os");
++const path = require("path");
++const { execFileSync } = require("child_process");
++const ai = require("../commit-ai-engine");
++
++function git(cwd, args) {
++  return execFileSync("git", args, {
++    cwd,
++    encoding: "utf8",
++    stdio: ["ignore", "pipe", "pipe"],
++    env: Object.assign({}, process.env, { GIT_TERMINAL_PROMPT: "0" })
++  }).trim();
++}
++
++function createRepo() {
++  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "logbook-commit-ai-"));
++  git(repo, ["init", "-b", "main"]);
++  git(repo, ["config", "user.name", "Logbook Test"]);
++  git(repo, ["config", "user.email", "logbook@example.test"]);
++  fs.writeFileSync(path.join(repo, "app.js"), "module.exports = true;\n");
++  git(repo, ["add", "-A"]);
++  git(repo, ["commit", "-m", "initial"]);
++  return repo;
++}
++
++function cleanup(repo) {
++  fs.rmSync(repo, { recursive: true, force: true, maxRetries: 3 });
++}
++
++test("extractRepoDiffSummary bounds large diffs to 12 KB", async () => {
++  const repo = createRepo();
++  try {
++    fs.writeFileSync(path.join(repo, "app.js"), Array.from({ length: 3000 }, (_, index) => `const line${index} = "changed-${index}";`).join("\n"));
++    const result = await ai.extractRepoDiffSummary(repo);
++    assert.ok(Buffer.byteLength(result.summary, "utf8") <= ai.MAX_DIFF_BYTES);
++    assert.equal(result.truncated, true);
++    assert.match(result.summary, /\[DIFF TRUNCATED\]$/);
++  } finally {
++    cleanup(repo);
++  }
++});
++
++test("diff preparation omits sensitive files and redacts token-shaped values", async () => {
++  const repo = createRepo();
++  try {
++    const secret = "AKIA1234567890ABCDEF";
++    fs.writeFileSync(path.join(repo, "app.js"), `module.exports = "${secret}";\n`);
++    fs.writeFileSync(path.join(repo, ".env"), "PASSWORD=never-send-this\n");
++    const result = await ai.extractRepoDiffSummary(repo);
++    assert.doesNotMatch(result.summary, /never-send-this/);
++    assert.doesNotMatch(result.summary, /\.env/);
++    assert.doesNotMatch(result.summary, new RegExp(secret));
++    assert.match(result.summary, /\[REDACTED\]/);
++    assert.equal(result.sensitiveFileCount, 1);
++  } finally {
++    cleanup(repo);
++  }
++});
++
++test("offline provider failure always returns three conventional commit suggestions", async () => {
++  const repo = createRepo();
++  try {
++    fs.mkdirSync(path.join(repo, "test"));
++    fs.writeFileSync(path.join(repo, "test", "engine.test.js"), "// coverage\n");
++    const unavailable = async () => { throw new Error("offline"); };
++    const result = await ai.suggestCommitMessages([repo], { providers: [unavailable, unavailable] });
++    assert.equal(result.provider, "heuristic");
++    assert.equal(result.suggestions.length, 3);
++    result.suggestions.forEach((suggestion) => assert.match(suggestion, ai.CONVENTIONAL_COMMIT_RE));
++    assert.equal(new Set(result.suggestions).size, 3);
++  } finally {
++    cleanup(repo);
++  }
++});
++
++test("safe untracked source excerpts give models code-level context", async () => {
++  const repo = createRepo();
++  try {
++    fs.writeFileSync(path.join(repo, "commit-suggester.js"), "function generateSemanticCommit(diff) {\n  return analyzeChangedSymbols(diff);\n}\n");
++    const result = await ai.extractRepoDiffSummary(repo);
++    assert.match(result.summary, /New file: commit-suggester\.js/);
++    assert.match(result.summary, /generateSemanticCommit/);
++    assert.match(result.summary, /analyzeChangedSymbols/);
++  } finally {
++    cleanup(repo);
++  }
++});
++
++test("heuristics recognize docs, tests, additions, and mixed structural work", () => {
++  const docs = ai.heuristicCommitSuggestions([{ repo: "demo", files: ["docs/guide.md"], changes: [{ status: " M", file: "docs/guide.md" }] }]);
++  const tests = ai.heuristicCommitSuggestions([{ repo: "demo", files: ["test/unit.test.js"], changes: [{ status: "??", file: "test/unit.test.js" }] }]);
++  const added = ai.heuristicCommitSuggestions([{ repo: "demo", files: ["src/widget.js"], changes: [{ status: "??", file: "src/widget.js" }] }]);
++  const mixed = ai.heuristicCommitSuggestions([{ repo: "demo", files: ["src/new.js", "src/old.js"], changes: [{ status: "A ", file: "src/new.js" }, { status: "D ", file: "src/old.js" }] }]);
++  assert.match(docs[0], /^docs\(/);
++  assert.match(tests[0], /^test\(/);
++  assert.match(added[0], /^feat\(/);
++  assert.match(mixed[0], /^refactor\(/);
++});
++
++test("model responses are reduced to distinct valid conventional commits", () => {
++  const content = JSON.stringify({ suggestions: [
++    "feat(engine): add local suggestions",
++    "feat(engine): add local suggestions",
++    "not a commit",
++    "fix(server): validate repository paths",
++    "docs(readme): explain offline behavior"
++  ] });
++  assert.deepEqual(ai.parseSuggestions(content), [
++    "feat(engine): add local suggestions",
++    "fix(server): validate repository paths",
++    "docs(readme): explain offline behavior"
++  ]);
++  const reasoned = '<think>Inspecting changed functions.</think>\n```json\n["feat(engine): analyze untracked source excerpts","fix(parser): remove reasoning before validation","test(ai): cover semantic commit output"]\n```';
++  assert.equal(ai.parseSuggestions(reasoned).length, 3);
++});
++
++test("local provider requests honor the configured timeout", async () => {
++  const hangingFetch = (url, init) => new Promise((resolve, reject) => {
++    init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
++  });
++  const started = Date.now();
++  await assert.rejects(ai.queryOllama("prompt", { fetch: hangingFetch, timeoutMs: 25 }), /aborted/);
++  assert.ok(Date.now() - started < 500);
++});
++
++test("OmniRoute uses its OpenAI-compatible gateway without leaking the key into the payload", async () => {
++  let request;
++  const fakeFetch = async (url, init) => {
++    request = { url, init };
++    return {
++      ok: true,
++      json: async () => ({ choices: [{ message: { content: '["feat(engine): analyze changed symbols","fix(api): validate selected repositories","test(ai): cover provider fallback"]' } }] })
++    };
++  };
++  const result = await ai.queryOmniRoute("sanitized prompt", {
++    allowCloud: true,
++    omniRouteApiKey: "test-secret-key",
++    omniRouteModel: "auto/best-coding-fast",
++    omniRouteUrl: "http://127.0.0.1:20128/v1",
++    fetch: fakeFetch
++  });
++  assert.equal(result.provider, "omniroute");
++  assert.equal(result.model, "auto/best-coding-fast");
++  assert.equal(request.url, "http://127.0.0.1:20128/v1/chat/completions");
++  assert.equal(request.init.headers.Authorization, "Bearer test-secret-key");
++  assert.doesNotMatch(request.init.body, /test-secret-key/);
++  assert.match(request.init.body, /sanitized prompt/);
++});

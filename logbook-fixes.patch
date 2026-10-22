@@ -1,0 +1,120 @@
+From d887a6a7bea21b0e01d46deaa8ce09aebd8d3348 Mon Sep 17 00:00:00 2001
+From: Binay Ghimire <binayire@gmail.com>
+Date: Thu, 22 Oct 2026 08:24:52 +0545
+Subject: [PATCH] fix: repair remote labels and commit suggestions
+
+---
+ commit-ai-engine.js        | 14 ++----------
+ commit-engine.js           |  7 +++++-
+ test/commit-engine.test.js | 47 ++++++++++++++++++++++++++++++++++----
+ 3 files changed, 50 insertions(+), 18 deletions(-)
+
+diff --git a/commit-ai-engine.js b/commit-ai-engine.js
+index 59834c5..57e123d 100644
+--- a/commit-ai-engine.js
++++ b/commit-ai-engine.js
+@@ -450,23 +450,13 @@ async function suggestCommitMessages(repoPaths, options = {}) {
+     try {
+       const result = await provider(prompt, options);
+       const suggestions = completeSuggestions(result.content, fallback);
+-      
+-      if (suggestions.length === 3) {
+-        const res = Object.assign({}, result, { suggestions });
+-        suggestionCache.set(cacheKey, { at: Date.now(), result: res });
+-        return res;
+-      }
+-
++      if (suggestions.length === 3) return Object.assign({}, result, { suggestions });
+     } catch (error) {
+       // Provider discovery is best effort. The deterministic fallback below is
+       // part of the product contract, not an error state.
+     }
+   }
+-  
+-  const res = { provider: "heuristic", model: null, suggestions: fallback };
+-  suggestionCache.set(cacheKey, { at: Date.now(), result: res });
+-  return res;
+-
++  return { provider: "heuristic", model: null, suggestions: fallback };
+ }
+ 
+ async function getLocalAiStatus(options = {}) {
+diff --git a/commit-engine.js b/commit-engine.js
+index 805fe89..c797fa1 100644
+--- a/commit-engine.js
++++ b/commit-engine.js
+@@ -370,7 +370,12 @@ function remoteLabel(url) {
+       raw.startsWith("./") || raw.startsWith("../") || /^file:\/\//i.test(raw)) {
+     let localPath = raw.replace(/^file:\/\//i, "").replace(/[\\/]+$/, "");
+     try { localPath = decodeURIComponent(localPath); } catch (error) {}
+-    const localName = path.basename(localPath) || "repository";
++    // A local remote may use Windows or POSIX separators regardless of the
++    // host running the bridge, so do not rely on the host platform's basename.
++    const localParts = localPath.split(/[\\/]+/).filter(Boolean);
++    const localName = localParts.length === 1 && /^[a-zA-Z]:$/.test(localParts[0])
++      ? "repository"
++      : localParts[localParts.length - 1] || "repository";
+     const localLabel = "local · " + localName;
+     return localLabel.length > 90 ? localLabel.slice(0, 87) + "..." : localLabel;
+   }
+diff --git a/test/commit-engine.test.js b/test/commit-engine.test.js
+index fd3cba2..557176a 100644
+--- a/test/commit-engine.test.js
++++ b/test/commit-engine.test.js
+@@ -391,11 +391,48 @@ test("normalizeUserPath expands tilde correctly", () => {
+ });
+ 
+ test("remoteLabel shortens local remotes and keeps hosted labels", () => {
+-  assert.equal(engine.remoteLabel("C:\\Projects\\foo.git"), "local · foo.git");
+-  assert.equal(engine.remoteLabel("file:///C:/Projects/foo.git"), "local · foo.git");
+-  assert.equal(engine.remoteLabel("/home/me/foo.git"), "local · foo.git");
+-  assert.equal(engine.remoteLabel("git@github.com:owner/repo.git"), "github.com/owner/repo");
+-  assert.equal(engine.remoteLabel("https://github.com/owner/repo.git"), "github.com/owner/repo");
++  const cases = [
++    ["C:\\Projects\\foo.git", "local · foo.git"],
++    ["C:/Projects/foo.git", "local · foo.git"],
++    ["\\\\server\\share\\foo.git", "local · foo.git"],
++    ["//server/share/foo.git", "local · foo.git"],
++    ["/home/me/foo.git", "local · foo.git"],
++    ["./foo.git", "local · foo.git"],
++    ["../workspace/foo.git", "local · foo.git"],
++    ["/home/me/foo.git/", "local · foo.git"],
++    ["C:\\Projects\\foo.git\\\\", "local · foo.git"],
++    ["file:///C:/Projects/foo.git", "local · foo.git"],
++    ["file:///home/me/foo.git", "local · foo.git"],
++    ["file:///C:/Projects/foo.git/", "local · foo.git"],
++    ["file:///C:/My%20Projects/foo.git", "local · foo.git"],
++    ["file:///C:/bad%ZZ/foo.git", "local · foo.git"],
++    ["git@github.com:owner/repo.git", "github.com/owner/repo"],
++    ["ssh://git@github.com/owner/repo.git", "github.com/owner/repo"],
++    ["https://github.com/owner/repo.git", "github.com/owner/repo"],
++    ["https://www.github.com/owner/repo.git", "github.com/owner/repo"]
++  ];
++  for (const [input, expected] of cases) {
++    assert.equal(engine.remoteLabel(input), expected, input);
++  }
++});
++
++test("remoteLabel falls back to repository for root-only local paths", () => {
++  assert.equal(engine.remoteLabel("/"), "local · repository");
++  assert.equal(engine.remoteLabel("C:\\"), "local · repository");
++  assert.equal(engine.remoteLabel("file:///"), "local · repository");
++});
++
++test("remoteLabel truncates long local and hosted labels", () => {
++  const longName = "a".repeat(100) + ".git";
++  const local = engine.remoteLabel("C:\\Projects\\" + longName);
++  assert.equal(local.length, 90);
++  assert.ok(local.startsWith("local · a"));
++  assert.ok(local.endsWith("..."));
++
++  const hosted = engine.remoteLabel("https://github.com/owner/" + longName);
++  assert.equal(hosted.length, 90);
++  assert.ok(hosted.startsWith("github.com/owner/a"));
++  assert.ok(hosted.endsWith("..."));
+ });
+ 
+ test("defaultCommitMessage uses the checkpoint format", () => {
+-- 
+2.52.0.windows.1
+
