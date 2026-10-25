@@ -944,6 +944,7 @@ async function undoLastCommit(repoPath) {
 
 module.exports = {
   DEFAULT_MAX_DEPTH,
+  artifactReasonLabel,
   defaultCommitMessage,
   formatTimestamp,
   inspectRepo,
@@ -965,4 +966,3 @@ module.exports = {
   summarize,
   undoLastCommit
 };
-
